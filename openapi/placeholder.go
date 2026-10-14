@@ -12,9 +12,9 @@
 //
 // Pixiu bootstrap.NewGinEngine 仅根据 env.RunMode() 自动注册文档：debug/test 模式提供以下入口，release 模式关闭：
 //
-//	/elements           默认展示 App，顶部可切换模块
-//	/elements/app       App 文档
-//	/elements/admin     Admin 文档
+//	/docs               默认展示 App，顶部可切换模块
+//	/docs/app           App 文档
+//	/docs/admin         Admin 文档
 //	/openapi/app.json   App OpenAPI 2.0 文档
 //	/openapi/admin.json Admin OpenAPI 2.0 文档
 //

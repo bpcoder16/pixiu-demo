@@ -102,7 +102,7 @@ curl -sS 'http://127.0.0.1:8888/api/app/oss/upload' \
 
 业务响应统一使用 HTTP 200，客户端应检查 `code`：成功为 `0`，参数错误为 `10001`，通用服务错误为 `400`。错误响应省略 `data`；未知错误码的文案为“未知错误”。未登记路径保持 HTTP 404，已登记路径的方法不匹配返回 HTTP 405。
 
-文档格式为 OpenAPI 2.0（Swagger 2.0）。`/elements` 展示 App 文档，顶部可切换 Admin；也可访问 `/elements/app`、`/elements/admin` 及 `/openapi/app.json`、`/openapi/admin.json`。App 文档包含 Ping 和 OSS 上传，Admin 文档包含 Admin Ping。
+文档格式为 OpenAPI 2.0（Swagger 2.0）。`/docs` 展示 App 文档，顶部可切换 Admin；也可访问 `/docs/app`、`/docs/admin` 及 `/openapi/app.json`、`/openapi/admin.json`。静态资源位于 `/docs/assets/`；旧 `/elements` 及其子路径返回 404，不提供重定向。App 文档包含 Ping 和 OSS 上传，Admin 文档包含 Admin Ping。
 
 新增接口时，在 Handler 注释中使用 `@x-module-app true` 或 `@x-module-admin true` 指定文档归属，生成命令通过 `--parseExtension` 筛选接口；未标记的接口不会收录。`@Tags` 只控制模块内的业务分组，不决定顶部模块导航。生成规则见 [`openapi/placeholder.go`](openapi/placeholder.go)，顶部模块名称和标题由 [`bootstrap/start.go`](bootstrap/start.go) 中的 `OpenAPIModule` 声明。
 

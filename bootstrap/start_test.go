@@ -89,8 +89,21 @@ func TestHTTPAssemblySmoke(t *testing.T) {
 		if !ready {
 			t.Fatal("服务未使用配置地址启动")
 		}
-		for _, path := range []string{"/openapi/app.json", "/openapi/admin.json", "/elements", "/elements/app", "/elements/admin"} {
-			resp, err := client.Get("http://" + addr + path)
+		for _, tc := range []struct {
+			path   string
+			status int
+		}{
+			{"/openapi/app.json", http.StatusOK},
+			{"/openapi/admin.json", http.StatusOK},
+			{"/docs", http.StatusOK},
+			{"/docs/app", http.StatusOK},
+			{"/docs/admin", http.StatusOK},
+			{"/docs/assets/openapi.js", http.StatusOK},
+			{"/elements", http.StatusNotFound},
+			{"/elements/app", http.StatusNotFound},
+			{"/elements/admin", http.StatusNotFound},
+		} {
+			resp, err := client.Get("http://" + addr + tc.path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -99,8 +112,8 @@ func TestHTTPAssemblySmoke(t *testing.T) {
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
-			if resp.StatusCode != http.StatusOK {
-				t.Fatalf("文档端点 %s 未接入 HTTP 服务: %d", path, resp.StatusCode)
+			if resp.StatusCode != tc.status {
+				t.Fatalf("文档端点 %s 状态: %d，预期 %d", tc.path, resp.StatusCode, tc.status)
 			}
 		}
 		cancel()
