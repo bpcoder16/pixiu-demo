@@ -23,6 +23,7 @@ func TestHTTPRouteStatus(t *testing.T) {
 		allow  string
 	}{
 		{http.MethodPost, "/api/app/ping", http.StatusMethodNotAllowed, "GET"},
+		{http.MethodGet, "/api/app/oss/upload", http.StatusMethodNotAllowed, "POST"},
 		{http.MethodGet, "/missing", http.StatusNotFound, ""},
 	} {
 		t.Run(tc.method+tc.path, func(t *testing.T) {

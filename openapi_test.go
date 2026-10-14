@@ -8,6 +8,7 @@ import (
 )
 
 func TestOpenAPIContract(t *testing.T) {
+	// 保留公共约定和固定的 Ping 样例检查，新增接口无需逐项追加断言。
 	for _, module := range []string{"app", "admin"} {
 		t.Run(module, func(t *testing.T) {
 			// 解析注释源，避免依赖未生成或过期的文档产物。

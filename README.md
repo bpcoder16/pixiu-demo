@@ -2,7 +2,7 @@
 
 基于 [Pixiu](https://github.com/bpcoder16/pixiu)、Gin 和 GORM 的 Go HTTP 服务基础骨架，用于演示项目分层、统一响应、基础设施装配、日志和资源生命周期。
 
-当前提供两个公开 Ping 样例、MySQL 主从会话入口、Redis、Elasticsearch、阿里云 OSS、阿里云 ES、NATS 默认实例，以及 App/Admin 分模块的 OpenAPI 文档。项目没有身份认证、令牌处理或云服务业务接口；接入实际业务时自行实现相应规则。
+当前提供两个公开 Ping 样例、OSS 文件上传接口、MySQL 主从会话入口、Redis、Elasticsearch、阿里云 OSS、阿里云 ES、NATS 默认实例，以及 App/Admin 分模块的 OpenAPI 文档。项目没有身份认证或令牌处理；接入实际业务时自行实现相应规则。
 
 ## 开发环境与启动
 
@@ -77,6 +77,7 @@ go run .
 | 方法 | 路径 | 行为 |
 | --- | --- | --- |
 | GET | `/api/app/ping` | 可选参数 `name`，默认 `world`，最多 32 个字符 |
+| POST | `/api/app/oss/upload` | multipart 必填 `file`、`key`，上传单个文件 |
 | GET | `/api/admin/ping` | 返回固定问候 `hello admin` |
 
 ```bash
@@ -87,9 +88,21 @@ curl -sS 'http://127.0.0.1:8888/api/app/ping?name=demo'
 {"code":0,"msg":"成功","data":{"message":"hello demo"}}
 ```
 
+上传文件时使用已初始化的默认 OSS 实例，目标 Bucket 来自 `conf/aliyunossx.demo.yaml`：
+
+```bash
+curl -sS 'http://127.0.0.1:8888/api/app/oss/upload' \
+  -F 'file=@/path/to/demo.txt' \
+  -F 'key=uploads/demo.txt'
+```
+
+`file` 只接收一个文件，本 demo 不额外设置固定的文件或请求正文大小上限。`key` 不能为空或全为空白，按原值传给 `ossx.PutObject`；同名对象遵循 OSS 的覆盖和版本控制规则。文件超过 1 MiB 时使用临时文件，上传结束后关闭并清理；向 OSS 传递文件的 Content-Type，缺失时使用 `application/octet-stream`。
+
+成功响应的 `data` 包含 `key`、`etag`、`requestId`、`versionId`；未开启 Bucket 版本控制时 `versionId` 可为空。参数不合法时返回业务码 `10001`，OSS 上传失败时返回 `400`。请求取消或超时会传递到 OSS 调用；上传失败不自动重试，超时不保证远端未写入。
+
 业务响应统一使用 HTTP 200，客户端应检查 `code`：成功为 `0`，参数错误为 `10001`，通用服务错误为 `400`。错误响应省略 `data`；未知错误码的文案为“未知错误”。未登记路径保持 HTTP 404，已登记路径的方法不匹配返回 HTTP 405。
 
-文档格式为 OpenAPI 2.0（Swagger 2.0）。`/elements` 展示 App 文档，顶部可切换 Admin；也可访问 `/elements/app`、`/elements/admin` 及 `/openapi/app.json`、`/openapi/admin.json`。两个模块均只包含各自的公开 Ping。
+文档格式为 OpenAPI 2.0（Swagger 2.0）。`/elements` 展示 App 文档，顶部可切换 Admin；也可访问 `/elements/app`、`/elements/admin` 及 `/openapi/app.json`、`/openapi/admin.json`。App 文档包含 Ping 和 OSS 上传，Admin 文档包含 Admin Ping。
 
 新增接口时，在 Handler 注释中使用 `@x-module-app true` 或 `@x-module-admin true` 指定文档归属，生成命令通过 `--parseExtension` 筛选接口；未标记的接口不会收录。`@Tags` 只控制模块内的业务分组，不决定顶部模块导航。生成规则见 [`openapi/placeholder.go`](openapi/placeholder.go)，顶部模块名称和标题由 [`bootstrap/start.go`](bootstrap/start.go) 中的 `OpenAPIModule` 声明。
 
@@ -133,7 +146,7 @@ bash test/control_test.sh
 gofmt -l bootstrap internal errorcode main.go openapi_test.go openapi
 ```
 
-Go 测试覆盖公开 Ping、参数边界、HTTP 404/405、请求日志作用域、文档核心契约和 HTTP 装配冒烟，无需启动外部基础设施。控制脚本测试使用模拟进程、端口和 supervise。测试和构建成功不代替真实基础设施连接验证。
+Go 测试覆盖公开 Ping、OSS 上传、参数边界、HTTP 404/405、请求日志作用域、文档核心契约和 HTTP 装配冒烟。OSS 测试使用本地 HTTP 模拟服务，无需启动外部基础设施。控制脚本测试使用模拟进程、端口和 supervise。测试和构建成功不代替真实基础设施连接验证。
 
 ```bash
 make                           # 构建并打包
