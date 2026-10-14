@@ -1,0 +1,36 @@
+# Go binaries and plugins
+*.out
+/pixiu-demo
+/main
+/output/
+
+# Local Go workspace and caches
+go.work
+go.work.sum
+.gocache/
+.cache/
+
+# Local environment, configuration and logs
+/conf/
+/log/
+.DS_Store
+
+# IDE and coding assistant local files
+.idea/
+.codex/
+.zcode/
+AGENTS.md
+CLAUDE.md
+.claude/
+
+# Temporary files and local worktrees
+/tmp/
+
+# Local planning and review documents
+/docs
+
+# Generated OpenAPI files
+/openapi/*
+!/openapi/placeholder.go
+!/openapi/app.go
+!/openapi/admin.go
