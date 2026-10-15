@@ -115,9 +115,21 @@ curl -sS 'http://127.0.0.1:8888/api/app/aliyun/es/synonyms-dicts-list'
 
 `downloadUrl` 按原值返回，可能包含短期签名。模板默认记录完整响应正文，使用该接口时建议在 `conf/gin.yaml` 中设置 `logResponseInfo: false`，避免签名链接进入访问日志。
 
+查询默认阿里云 ES 实例详情：
+
+```bash
+curl -sS 'http://127.0.0.1:8888/api/app/aliyun/es/describe-instance'
+```
+
+```json
+{"code":0,"msg":"成功","data":{"requestId":"es-request-id","instanceId":"es-instance-id","status":"active","version":"8.17"}}
+```
+
+目标实例同样来自 `conf/aliyunesx.demo.yaml` 的 `instanceID`；返回管理 API 的实例 ID、原始状态和 ES 版本，`active` 不表示词典已分发或加载。查询失败返回业务码 `400`，省略 `data`，不暴露 SDK 错误详情；请求取消或超时传递到下游，不自动重试。
+
 业务响应统一使用 HTTP 200，客户端应检查 `code`：成功为 `0`，参数错误为 `10001`，通用服务错误为 `400`。错误响应省略 `data`；未知错误码的文案为“未知错误”。未登记路径保持 HTTP 404，已登记路径的方法不匹配返回 HTTP 405。
 
-文档格式为 OpenAPI 2.0（Swagger 2.0）。`/docs` 展示 App 文档，顶部可切换 Admin；也可访问 `/docs/app`、`/docs/admin` 及 `/openapi/app.json`、`/openapi/admin.json`。静态资源位于 `/docs/assets/`；旧 `/elements` 及其子路径返回 404，不提供重定向。App 文档包含 Ping、OSS 上传和阿里云 ES 同义词词典查询，Admin 文档包含 Admin Ping。
+文档格式为 OpenAPI 2.0（Swagger 2.0）。`/docs` 展示 App 文档，顶部可切换 Admin；也可访问 `/docs/app`、`/docs/admin` 及 `/openapi/app.json`、`/openapi/admin.json`。静态资源位于 `/docs/assets/`；旧 `/elements` 及其子路径返回 404，不提供重定向。App 文档包含 Ping、OSS 上传和阿里云 ES 同义词词典、实例详情查询，Admin 文档包含 Admin Ping。
 
 新增接口时，在 Handler 注释中使用 `@x-module-app true` 或 `@x-module-admin true` 指定文档归属，生成命令通过 `--parseExtension` 筛选接口；未标记的接口不会收录。`@Tags` 只控制模块内的业务分组，不决定顶部模块导航。生成规则见 [`openapi/placeholder.go`](openapi/placeholder.go)，顶部模块名称和标题由 [`bootstrap/start.go`](bootstrap/start.go) 中的 `OpenAPIModule` 声明。
 
@@ -133,7 +145,7 @@ errorcode/                 统一业务码和文案
 internal/route/            路由登记
 internal/handler/          参数校验与统一响应
 internal/service/aliyunoss/ 阿里云 OSS 上传业务
-internal/service/aliyunes/ 阿里云 ES 同义词词典查询业务
+internal/service/aliyunes/ 阿里云 ES 词典及实例查询业务
 internal/model/            请求和响应结构
 internal/repository/       数据库查询及 GORM 默认主从会话入口
 internal/database/         项目拥有的 Model 迁移清单
@@ -143,7 +155,11 @@ package/bin/               部署控制脚本及 supervise
 test/                      控制脚本隔离测试
 ```
 
-Handler 只负责参数解析、校验和根据 Service 返回数据构造响应；具体业务放入 `internal/service/`，按业务领域分包，通过构造函数创建服务并接收标准 `context.Context`。OSS 上传由 `internal/service/aliyunoss` 负责打开和关闭文件、设置 Content-Type 并调用默认 OSS 客户端；multipart 临时文件仍由 Handler 随请求结束清理。阿里云 ES 同义词词典查询由 `internal/service/aliyunes` 调用默认管理客户端，Handler 将查询结果转换为接口响应。
+Handler 只负责参数解析、校验和根据 Service 返回数据构造响应；具体业务放入 `internal/service/`，按业务领域分包，通过构造函数创建服务并接收标准 `context.Context`。OSS 上传由 `internal/service/aliyunoss` 负责打开和关闭文件、设置 Content-Type 并调用默认 OSS 客户端；multipart 临时文件仍由 Handler 随请求结束清理。阿里云 ES 词典及实例查询由 `internal/service/aliyunes` 调用默认管理客户端，Handler 将查询结果转换为接口响应。
+
+Service 按职责、依赖、状态和生命周期划分。同一领域内职责相关、依赖相同且没有独立状态或生命周期差异的操作，默认归入同一个 Service 结构体，方法可按功能分布在多个 `.go` 文件中；文件数量和接口数量不决定结构体数量。只有出现独立业务流程、明显不同的依赖或状态、不同的初始化或关闭职责时，再拆分多个 Service；共用一个客户端本身不足以决定合并。
+
+`internal/service/aliyunes` 统一使用 `aliyunes.Service` 和 `aliyunes.NewService()`。`service.go` 定义结构体与构造函数，`synonyms.go` 实现 `(*Service).ListSynonymsDicts(ctx)`，`instance.go` 实现 `(*Service).DescribeInstance(ctx)`。合并后方法名明确操作对象；请求的 Context 通过方法参数传入，不保存在 Service 中，共享客户端仍由启动阶段管理。
 
 数据库查询放入 `internal/repository/`，Repository 只能由 Service 调用，Handler 不直接访问数据库。沿调用链传递当前操作的 Context；每次查询通过 `DefaultSessions().MasterDB(ctx)` 或 `SlaveDB(ctx)` 选择会话，不缓存请求会话。未配置从库时由 Pixiu 回退到主库。
 

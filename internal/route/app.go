@@ -14,5 +14,6 @@ func registerAppRoutesV2(appGroup *gin.RouterGroup) {
 		aliyunGroup.POST("/oss/upload", handler.AppOSSUpload)
 
 		aliyunGroup.GET("/es/synonyms-dicts-list", handler.AppESSynonymsDictsList)
+		aliyunGroup.GET("/es/describe-instance", handler.AppESDescribeInstance)
 	}
 }

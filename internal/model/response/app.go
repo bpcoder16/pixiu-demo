@@ -25,3 +25,11 @@ type ESSynonymsDictInfo struct {
 	// DownloadURL 可能含短期签名，应避免将响应正文写入日志。
 	DownloadURL string `json:"downloadUrl" example:"https://example.com/synonyms.txt"`
 }
+
+type AppESDescribeInstanceResponse struct {
+	RequestID  string `json:"requestId" example:"es-request-id"`
+	InstanceID string `json:"instanceId" example:"es-instance-id"`
+	// Status 保留管理 API 的原始状态，active 不代表词典已分发或加载。
+	Status  string `json:"status" example:"active"`
+	Version string `json:"version" example:"8.17"`
+}
