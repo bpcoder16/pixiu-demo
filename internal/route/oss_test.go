@@ -170,7 +170,7 @@ func TestAppOSSUpload(t *testing.T) {
 
 	t.Run("非 multipart 请求", func(t *testing.T) {
 		before := calls.Load()
-		req := httptest.NewRequest(http.MethodPost, "/api/app/oss/upload", strings.NewReader(`{"key":"uploads/demo.txt"}`))
+		req := httptest.NewRequest(http.MethodPost, "/api/app/aliyun/oss/upload", strings.NewReader(`{"key":"uploads/demo.txt"}`))
 		req.Header.Set("Content-Type", "application/json")
 		writer := httptest.NewRecorder()
 		router.ServeHTTP(writer, req)
@@ -233,7 +233,7 @@ func newOSSUploadRequest(t *testing.T, key, content, contentType string, files i
 	if err := form.Close(); err != nil {
 		t.Fatal(err)
 	}
-	req := httptest.NewRequest(http.MethodPost, "/api/app/oss/upload", &body)
+	req := httptest.NewRequest(http.MethodPost, "/api/app/aliyun/oss/upload", &body)
 	req.Header.Set("Content-Type", form.FormDataContentType())
 	return req
 }

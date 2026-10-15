@@ -23,7 +23,9 @@ func TestHTTPRouteStatus(t *testing.T) {
 		allow  string
 	}{
 		{http.MethodPost, "/api/app/ping", http.StatusMethodNotAllowed, "GET"},
-		{http.MethodGet, "/api/app/oss/upload", http.StatusMethodNotAllowed, "POST"},
+		{http.MethodGet, "/api/app/aliyun/oss/upload", http.StatusMethodNotAllowed, "POST"},
+		{http.MethodPost, "/api/app/aliyun/es/synonyms-dicts-list", http.StatusMethodNotAllowed, "GET"},
+		{http.MethodPost, "/api/app/oss/upload", http.StatusNotFound, ""},
 		{http.MethodGet, "/missing", http.StatusNotFound, ""},
 	} {
 		t.Run(tc.method+tc.path, func(t *testing.T) {

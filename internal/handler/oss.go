@@ -4,11 +4,10 @@ import (
 	"strings"
 
 	"pixiu-demo/errorcode"
-	"pixiu-demo/internal/infra/aliyunoss"
 	"pixiu-demo/internal/model/request"
 	"pixiu-demo/internal/model/response"
+	"pixiu-demo/internal/service/aliyunoss"
 
-	"github.com/bpcoder16/pixiu/infra/aliyun/ossx"
 	"github.com/gin-gonic/gin"
 )
 
@@ -23,7 +22,7 @@ import (
 // @Param        file formData file true "上传文件"
 // @Param        key formData string true "Bucket 内的对象名，例如 uploads/demo.txt"
 // @Success      200 {object} Response{data=response.AppOSSUploadResponse} "code=0 时返回 data；code=10001 表示参数错误，code=400 表示上传失败，失败时省略 data"
-// @Router       /api/app/oss/upload [post]
+// @Router       /api/app/aliyun/oss/upload [post]
 func AppOSSUpload(ctx *gin.Context) {
 	defer func() {
 		if form := ctx.Request.MultipartForm; form != nil {
@@ -48,21 +47,7 @@ func AppOSSUpload(ctx *gin.Context) {
 		returnErrJson(ctx, errorcode.ErrParams, "file 只能上传一个文件")
 		return
 	}
-	file, err := req.File.Open()
-	if err != nil {
-		returnErrJson(ctx, errorcode.ErrServiceException)
-		return
-	}
-	defer file.Close()
-	contentType := req.File.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	result, err := aliyunoss.Client().PutObject(ctx.Request.Context(), ossx.PutObjectRequest{
-		Key:         req.Key,
-		Body:        file,
-		ContentType: contentType,
-	})
+	result, err := aliyunoss.NewUploadService().Upload(ctx.Request.Context(), req.Key, req.File)
 	if err != nil {
 		// SDK 错误可能携带签名或响应正文，仅向调用方返回统一服务错误。
 		returnErrJson(ctx, errorcode.ErrServiceException)

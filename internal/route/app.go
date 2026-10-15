@@ -8,5 +8,11 @@ import (
 
 func registerAppRoutesV2(appGroup *gin.RouterGroup) {
 	appGroup.GET("/ping", handler.AppPing)
-	appGroup.POST("/oss/upload", handler.AppOSSUpload)
+
+	aliyunGroup := appGroup.Group("/aliyun")
+	{
+		aliyunGroup.POST("/oss/upload", handler.AppOSSUpload)
+
+		aliyunGroup.GET("/es/synonyms-dicts-list", handler.AppESSynonymsDictsList)
+	}
 }
