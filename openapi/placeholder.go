@@ -21,7 +21,7 @@
 // 两个模块共用程序内嵌的 Elements 资源，各自读取独立文档；不再注册 /openapi/doc.json。
 // Elements 使用 hash 导航，支持直接刷新接口详情页。
 // debug/test 模式未生成文档时启动返回错误，release 模式不要求生成文档。
-// 不读取独立文档配置；gin.yaml 的 logResponseInfo 会记录完整 UI 资源，使用文档时建议关闭该详情开关。
+// 不读取独立文档配置。
 // 同一个 HTTP 状态码只保留一条响应定义，业务失败码和 data 省略规则写入其描述，避免覆盖成功结构。
 //
 //go:generate go run github.com/swaggo/swag/cmd/swag@v1.16.6 init --dir .. --generalInfo openapi/app.go --output . --instanceName app --parseExtension module-app --parseInternal

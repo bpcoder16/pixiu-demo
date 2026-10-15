@@ -70,7 +70,7 @@ go run .
 
 `log.hookStd` 默认开启，模板也设置为 true，stdout/stderr 会重定向到上述 `std/` 文件，持续至进程退出。这两个原始输出文件不轮转。该能力仅支持 Linux/macOS；其他平台或需要保留终端标准输出时，在 `conf/app.yaml` 的 `log` 段设置 `hookStd: false`，业务日志仍写入 `biz/` 文件。
 
-`gin.yaml` 模板将 `logRequestInfo`、`logResponseInfo` 都设为 true，完整记录请求和响应详情。访问 Elements 时，建议将 `logResponseInfo` 设为 false，避免把完整文档 UI 静态资源写入日志；按需关闭 `logRequestInfo` 可停止请求详情采集。
+`gin.yaml` 模板将 `logRequestInfo`、`logResponseInfo` 都设为 true，完整记录请求和响应详情；文档请求由底层库自动跳过访问日志和详情采集。按需关闭对应开关可停止请求或响应详情采集。
 
 ## 接口与文档
 
