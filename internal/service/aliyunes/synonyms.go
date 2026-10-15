@@ -17,3 +17,15 @@ func (s *Service) ListSynonymsDicts(ctx context.Context) (esx.ListSynonymsDictsR
 	}
 	return result, nil
 }
+
+// UpdateSynonymsDicts 使用当前操作的 Context 提交完整目标清单。
+func (s *Service) UpdateSynonymsDicts(ctx context.Context, req esx.UpdateSynonymsDictsRequest) (esx.UpdateSynonymsDictsResult, error) {
+	if err := ctx.Err(); err != nil {
+		return esx.UpdateSynonymsDictsResult{}, err
+	}
+	result, err := aliyunes.Client().UpdateSynonymsDicts(ctx, req)
+	if err != nil {
+		return result, fmt.Errorf("update Aliyun ES synonyms dictionaries: %w", err)
+	}
+	return result, nil
+}

@@ -33,3 +33,16 @@ type AppESDescribeInstanceResponse struct {
 	Status  string `json:"status" example:"active"`
 	Version string `json:"version" example:"8.17"`
 }
+
+type AppESSynonymsDictsUpdateResponse struct {
+	RequestID string                     `json:"requestId" example:"es-request-id"`
+	Dicts     []ESSynonymsDictUpdateInfo `json:"dicts"`
+}
+
+// ESSynonymsDictUpdateInfo 是管理 API 返回的更新元数据，不表示词典已加载。
+type ESSynonymsDictUpdateInfo struct {
+	Name       string `json:"name" example:"synonyms.txt"`
+	FileSize   int64  `json:"fileSize" example:"1024"`
+	SourceType string `json:"sourceType" example:"OSS"`
+	Type       string `json:"type" example:"SYNONYMS"`
+}

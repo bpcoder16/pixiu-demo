@@ -10,10 +10,8 @@ import (
 	"os/exec"
 	"reflect"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/bpcoder16/pixiu/infra/aliyun/esx"
 )
@@ -35,10 +33,6 @@ func TestAppAliyunESSynonymsDictsUpdate(t *testing.T) {
 	const resultDicts = `[{"name":"keep.txt","fileSize":10,"sourceType":"ORIGIN","type":"SYNONYMS"},{"name":"current.txt","fileSize":20,"sourceType":"OSS","type":"SYNONYMS"}]`
 	var calls atomic.Int64
 	var mode atomic.Int32
-	entered := make(chan struct{}, 2)
-	release := make(chan struct{})
-	releaseUpdate := sync.OnceFunc(func() { close(release) })
-	t.Cleanup(releaseUpdate)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		if r.Method != http.MethodPut || r.URL.Path != "/openapi/instances/es-demo/synonymsDict" || r.URL.Query().Get("clientToken") != "release-1" {
@@ -53,18 +47,10 @@ func TestAppAliyunESSynonymsDictsUpdate(t *testing.T) {
 			t.Errorf("完整清单或 OSS 来源转换错误: got=%v, want=%v", got, want)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		switch mode.Load() {
-		case 1:
+		if mode.Load() == 1 {
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = io.WriteString(w, `{"RequestId":"failed-request","Code":"AccessDenied","Message":"private-update-error"}`)
 			return
-		case 2:
-			entered <- struct{}{}
-			select {
-			case <-release:
-			case <-r.Context().Done():
-				return
-			}
 		}
 		_, _ = io.WriteString(w, `{"RequestId":"update-request","Result":`+resultDicts+`}`)
 	}))
@@ -140,6 +126,21 @@ func TestAppAliyunESSynonymsDictsUpdate(t *testing.T) {
 		{name: "非法文件名不可提交", body: `{"clientToken":"release-1","dicts":[{"name":"../bad.txt","sourceType":"ORIGIN"}]}`, code: 10001},
 		{name: "空白令牌不可提交", body: `{"clientToken":" ","dicts":` + inventory + `}`, code: 10001},
 		{name: "非 ASCII 令牌不可提交", body: `{"clientToken":"发布","dicts":` + inventory + `}`, code: 10001},
+		{
+			name: "超过 64 字符的令牌不可提交",
+			body: `{"clientToken":"` + strings.Repeat("a", 65) + `","dicts":` + inventory + `}`,
+			code: 10001,
+		},
+		{
+			name: "超过 30 字符的文件名不可提交",
+			body: `{"clientToken":"release-1","dicts":[{"name":"` + strings.Repeat("a", 27) + `.txt","sourceType":"ORIGIN"}]}`,
+			code: 10001,
+		},
+		{
+			name: "无效 JSON 不可提交",
+			body: `{`,
+			code: 10001,
+		},
 		{name: "下游失败不重试且不泄露错误", body: validBody, mode: 1, calls: 1, code: 400},
 		{name: "请求取消不发起下游调用", body: validBody, cancel: true, code: 400},
 	} {
@@ -157,34 +158,4 @@ func TestAppAliyunESSynonymsDictsUpdate(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("共享默认实例的更新串行且等待可取消", func(t *testing.T) {
-		mode.Store(2)
-		defer releaseUpdate()
-		before := calls.Load()
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		done := make(chan *httptest.ResponseRecorder, 1)
-		go func() { done <- serve(ctx, validBody) }()
-		select {
-		case <-entered:
-		case <-ctx.Done():
-			t.Fatal("首次更新未进入下游")
-		}
-		waitingCtx, stopWaiting := context.WithTimeout(ctx, 100*time.Millisecond)
-		defer stopWaiting()
-		checkResponse(t, serve(waitingCtx, validBody), 400)
-		if calls.Load()-before != 1 {
-			t.Fatal("前一次更新完成前不应提交下一份完整清单")
-		}
-		releaseUpdate()
-		select {
-		case writer := <-done:
-			checkResponse(t, writer, 0)
-		case <-ctx.Done():
-			t.Fatal("首次更新未结束")
-		}
-		mode.Store(0)
-		checkResponse(t, serve(ctx, validBody), 0)
-	})
 }

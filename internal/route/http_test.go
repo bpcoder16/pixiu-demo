@@ -26,6 +26,7 @@ func TestHTTPRouteStatus(t *testing.T) {
 		{http.MethodGet, "/api/app/aliyun/oss/upload", http.StatusMethodNotAllowed, "POST"},
 		{http.MethodPost, "/api/app/aliyun/es/synonyms-dicts-list", http.StatusMethodNotAllowed, "GET"},
 		{http.MethodPost, "/api/app/aliyun/es/describe-instance", http.StatusMethodNotAllowed, "GET"},
+		{http.MethodGet, "/api/app/aliyun/es/synonyms-dicts-update", http.StatusMethodNotAllowed, "POST"},
 		{http.MethodPost, "/api/app/oss/upload", http.StatusNotFound, ""},
 		{http.MethodGet, "/missing", http.StatusNotFound, ""},
 	} {
