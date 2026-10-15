@@ -1,5 +1,10 @@
 package request
 
+type AppElasticsearchValidateSynonymsRequest struct {
+	// SynonymsPath 是 ES 节点上的 Solr 格式词库路径，不是本机文件或下载链接。
+	SynonymsPath string `json:"synonymsPath" binding:"required" example:"analysis/synonyms.txt"`
+}
+
 type AppESSynonymsDictsUpdateRequest struct {
 	// ClientToken 同一次更新的重试须复用，不同更新须更换，最多 64 个 ASCII 字符。
 	ClientToken string `json:"clientToken" binding:"required,max=64,ascii" example:"release-1"`

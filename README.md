@@ -2,7 +2,7 @@
 
 基于 [Pixiu](https://github.com/bpcoder16/pixiu)、Gin 和 GORM 的 Go HTTP 服务基础骨架，用于演示项目分层、统一响应、基础设施装配、日志和资源生命周期。
 
-当前提供两个公开 Ping 样例、OSS 文件上传、阿里云 ES 同义词词典查询与更新、实例详情查询接口、MySQL 主从会话入口、Redis、Elasticsearch、阿里云 OSS、阿里云 ES、NATS 默认实例，以及 App/Admin 分模块的 OpenAPI 文档。项目没有身份认证或令牌处理；接入实际业务时自行实现相应规则。
+当前提供两个公开 Ping 样例、OSS 文件上传、ES 同义词词库验证、阿里云 ES 同义词词典查询与更新、实例详情查询接口、MySQL 主从会话入口、Redis、Elasticsearch、阿里云 OSS、阿里云 ES、NATS 默认实例，以及 App/Admin 分模块的 OpenAPI 文档。项目没有身份认证或令牌处理；接入实际业务时自行实现相应规则。
 
 ## 开发环境与启动
 
@@ -78,6 +78,7 @@ go run .
 | --- | --- | --- |
 | GET | `/api/app/ping` | 可选参数 `name`，默认 `world`，最多 32 个字符 |
 | POST | `/api/app/aliyun/oss/upload` | multipart 必填 `file`、`key`，上传单个文件 |
+| POST | `/api/app/elasticsearch/synonyms-validate` | JSON 必填 `synonymsPath`，创建并清理临时索引以验证节点词库 |
 | GET | `/api/app/aliyun/es/synonyms-dicts-list` | 无需参数，查询默认阿里云 ES 实例的全部同义词文件 |
 | POST | `/api/app/aliyun/es/synonyms-dicts-update` | JSON 必填 `clientToken`、非空 `dicts`，提交完整目标清单 |
 | GET | `/api/app/aliyun/es/describe-instance` | 无需参数，查询默认阿里云 ES 实例详情 |
@@ -102,6 +103,24 @@ curl -sS 'http://127.0.0.1:8888/api/app/aliyun/oss/upload' \
 `file` 只接收一个文件，本 demo 不额外设置固定的文件或请求正文大小上限。`key` 不能为空或全为空白，按原值传给 `ossx.PutObject`；同名对象遵循 OSS 的覆盖和版本控制规则。文件超过 1 MiB 时使用临时文件，上传结束后关闭并清理；向 OSS 传递文件的 Content-Type，缺失时使用 `application/octet-stream`。
 
 成功响应的 `data` 包含 `key`、`etag`、`requestId`、`versionId`；未开启 Bucket 版本控制时 `versionId` 可为空。参数不合法时返回业务码 `10001`，OSS 上传失败时返回 `400`。请求取消或超时会传递到 OSS 调用；上传失败不自动重试，超时不保证远端未写入。
+
+验证同义词词库时，使用 `conf/elasticsearch.demo.yaml` 配置的默认 ES 数据面客户端，调用 Pixiu 的 `biz/elasticsearchservice` 包中 `(*Service).ValidateSynonyms` 方法：
+
+```bash
+curl -sS 'http://127.0.0.1:8888/api/app/elasticsearch/synonyms-validate' \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"synonymsPath":"analysis/synonyms.txt"}'
+```
+
+`synonymsPath` 是 ES 节点上的 Solr 格式词库路径，不是 Go 进程本机文件或下载链接；不能为空白或含空字符，按原值传递。默认 ES 客户端须具备创建、删除临时索引的权限。验证使用固定的 `standard → lowercase → synonym_graph` 分析链，严格加载词库，只有创建及分片均确认才算通过；确认创建后以独立的 5 秒期限清理索引，方法等待清理结束后返回。
+
+```json
+{"code":0,"msg":"成功","data":{"index":"pixiu-synonym-validation-0123456789abcdef0123456789abcdef","valid":true,"stage":"complete","cleanup":"succeeded","mayExist":false}}
+```
+
+`valid` 仅证明固定分析链在执行节点可加载词库，不证明全节点分发一致或业务召回效果。参数不合法返回业务码 `10001`，创建或清理失败均返回 `400`，省略 `data`，不暴露底层错误详情。失败日志保留 `index`、`valid`、`stage`、`cleanup`、`mayExist` 和错误概要；`mayExist=true` 表示可能遗留索引，需按日志中的 `index` 人工核查。即使 `valid=true`，清理失败仍返回服务错误。
+
+请求取消或超时传递到创建操作；确认创建后的清理不受请求取消影响。创建结果不确定时不会自动删除，不自动重试，避免误删或掩盖不确定结果。
 
 查询同义词词典时使用默认阿里云 ES 管理客户端，目标实例来自 `conf/aliyunesx.demo.yaml` 的 `instanceID`：
 
@@ -155,7 +174,7 @@ curl -sS 'http://127.0.0.1:8888/api/app/aliyun/es/describe-instance'
 
 业务响应统一使用 HTTP 200，客户端应检查 `code`：成功为 `0`，参数错误为 `10001`，通用服务错误为 `400`。错误响应省略 `data`；未知错误码的文案为“未知错误”。未登记路径保持 HTTP 404，已登记路径的方法不匹配返回 HTTP 405。
 
-文档格式为 OpenAPI 2.0（Swagger 2.0）。`/docs` 展示 App 文档，顶部可切换 Admin；也可访问 `/docs/app`、`/docs/admin` 及 `/openapi/app.json`、`/openapi/admin.json`。静态资源位于 `/docs/assets/`；旧 `/elements` 及其子路径返回 404，不提供重定向。App 文档包含 Ping、OSS 上传和阿里云 ES 同义词词典查询与更新、实例详情查询，Admin 文档包含 Admin Ping。
+文档格式为 OpenAPI 2.0（Swagger 2.0）。`/docs` 展示 App 文档，顶部可切换 Admin；也可访问 `/docs/app`、`/docs/admin` 及 `/openapi/app.json`、`/openapi/admin.json`。静态资源位于 `/docs/assets/`；旧 `/elements` 及其子路径返回 404，不提供重定向。App 文档包含 Ping、OSS 上传、ES 同义词词库验证和阿里云 ES 同义词词典查询与更新、实例详情查询，Admin 文档包含 Admin Ping。
 
 新增接口时，在 Handler 注释中使用 `@x-module-app true` 或 `@x-module-admin true` 指定文档归属，生成命令通过 `--parseExtension` 筛选接口；未标记的接口不会收录。`@Tags` 只控制模块内的业务分组，不决定顶部模块导航。生成规则见 [`openapi/placeholder.go`](openapi/placeholder.go)，顶部模块名称和标题由 [`bootstrap/start.go`](bootstrap/start.go) 中的 `OpenAPIModule` 声明。
 
@@ -172,6 +191,7 @@ internal/route/            路由登记
 internal/handler/          参数校验与统一响应
 internal/service/aliyunoss/ 阿里云 OSS 上传业务
 internal/service/aliyunes/ 阿里云 ES 词典管理及实例查询业务
+internal/service/elasticsearch/ ES 数据面同义词词库验证
 internal/model/            请求和响应结构
 internal/repository/       数据库查询及 GORM 默认主从会话入口
 internal/database/         项目拥有的 Model 迁移清单
@@ -186,6 +206,8 @@ Handler 只负责参数解析、校验和根据 Service 返回数据构造响应
 Service 按职责、依赖、状态和生命周期划分。同一领域内职责相关、依赖相同且没有独立状态或生命周期差异的操作，默认归入同一个 Service 结构体，方法可按功能分布在多个 `.go` 文件中；文件数量和接口数量不决定结构体数量。只有出现独立业务流程、明显不同的依赖或状态、不同的初始化或关闭职责时，再拆分多个 Service；共用一个客户端本身不足以决定合并。
 
 `internal/service/aliyunes` 统一使用 `aliyunes.Service` 和 `aliyunes.NewService()`。`service.go` 定义结构体与构造函数，`synonyms.go` 实现 `(*Service).ListSynonymsDicts(ctx)` 和 `(*Service).UpdateSynonymsDicts(ctx, req)`，`instance.go` 实现 `(*Service).DescribeInstance(ctx)`。方法名明确操作对象；请求的 Context 通过方法参数传入，不保存在 Service 中，共享客户端仍由启动阶段管理。
+
+`internal/service/elasticsearch` 使用默认 ES 数据面客户端调用 Pixiu 的 `elasticsearchservice`，负责同义词词库验证；Handler 负责路径参数校验、失败状态日志和响应转换。
 
 数据库查询放入 `internal/repository/`，Repository 只能由 Service 调用，Handler 不直接访问数据库。沿调用链传递当前操作的 Context；每次查询通过 `DefaultSessions().MasterDB(ctx)` 或 `SlaveDB(ctx)` 选择会话，不缓存请求会话。未配置从库时由 Pixiu 回退到主库。
 
@@ -209,7 +231,7 @@ bash test/control_test.sh
 gofmt -l bootstrap internal errorcode main.go openapi_test.go openapi
 ```
 
-Go 测试覆盖公开 Ping、OSS 上传、阿里云 ES 同义词词典查询与更新、实例详情查询、参数边界、请求取消、HTTP 404/405、请求日志作用域、文档核心契约和 HTTP 装配冒烟。OSS 和阿里云 ES 测试使用本地 HTTP 模拟服务，无需启动外部基础设施。控制脚本测试使用模拟进程、端口和 supervise。测试和构建成功不代替真实基础设施连接验证。
+Go 测试覆盖公开 Ping、OSS 上传、ES 同义词词库验证及清理失败、阿里云 ES 同义词词典查询与更新、实例详情查询、参数边界、请求取消、HTTP 404/405、请求日志作用域、文档核心契约和 HTTP 装配冒烟。OSS、ES 数据面和阿里云 ES 测试使用本地 HTTP 模拟服务，无需启动外部基础设施。控制脚本测试使用模拟进程、端口和 supervise。测试和构建成功不代替真实基础设施连接验证。
 
 ```bash
 make                           # 构建并打包

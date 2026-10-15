@@ -8,6 +8,7 @@ import (
 
 func registerAppRoutesV2(appGroup *gin.RouterGroup) {
 	appGroup.GET("/ping", handler.AppPing)
+	appGroup.POST("/elasticsearch/synonyms-validate", handler.AppElasticsearchValidateSynonyms)
 
 	aliyunGroup := appGroup.Group("/aliyun")
 	{

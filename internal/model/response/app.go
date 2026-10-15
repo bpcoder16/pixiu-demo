@@ -12,6 +12,16 @@ type AppOSSUploadResponse struct {
 	VersionID string `json:"versionId" example:"oss-version-id"`
 }
 
+type AppElasticsearchValidateSynonymsResponse struct {
+	Index string `json:"index" example:"pixiu-synonym-validation-0123456789abcdef0123456789abcdef"`
+	// Valid 仅表示固定分析链在执行节点可加载词库，不保证集群分发或业务召回效果。
+	Valid   bool   `json:"valid" example:"true"`
+	Stage   string `json:"stage" enums:"prepare,create,complete" example:"complete"`
+	Cleanup string `json:"cleanup" enums:"not_attempted,succeeded,failed" example:"succeeded"`
+	// MayExist 表示本次调用可能遗留索引，不是存在性查询。
+	MayExist bool `json:"mayExist" example:"false"`
+}
+
 type AppESSynonymsDictsListResponse struct {
 	RequestID string               `json:"requestId" example:"es-request-id"`
 	Dicts     []ESSynonymsDictInfo `json:"dicts"`
