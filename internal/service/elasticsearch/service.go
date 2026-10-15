@@ -6,7 +6,7 @@ import (
 	"github.com/bpcoder16/pixiu/infra/elasticsearchx"
 )
 
-// Service 使用创建时选定的 ES 数据面客户端提供同义词验证。
+// Service 使用创建时选定的 ES 数据面客户端提供同义词验证与搜索分析器重载。
 type Service struct {
 	client *elasticsearchx.Client
 }

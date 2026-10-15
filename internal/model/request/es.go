@@ -5,6 +5,11 @@ type AppElasticsearchValidateSynonymsRequest struct {
 	SynonymsPath string `json:"synonymsPath" binding:"required" example:"analysis/synonyms.txt"`
 }
 
+type AppElasticsearchReloadSynonymsRequest struct {
+	// Index 必须是单个实际索引名，不使用别名、数据流或索引选择器。
+	Index string `json:"index" binding:"required" example:"products"`
+}
+
 type AppESSynonymsDictsUpdateRequest struct {
 	// ClientToken 同一次更新的重试须复用，不同更新须更换，最多 64 个 ASCII 字符。
 	ClientToken string `json:"clientToken" binding:"required,max=64,ascii" example:"release-1"`

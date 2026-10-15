@@ -2,7 +2,7 @@
 
 基于 [Pixiu](https://github.com/bpcoder16/pixiu)、Gin 和 GORM 的 Go HTTP 服务基础骨架，用于演示项目分层、统一响应、基础设施装配、日志和资源生命周期。
 
-当前提供两个公开 Ping 样例、OSS 文件上传、ES 同义词词库验证、阿里云 ES 同义词词典查询与更新、实例详情查询接口、MySQL 主从会话入口、Redis、Elasticsearch、阿里云 OSS、阿里云 ES、NATS 默认实例，以及 App/Admin 分模块的 OpenAPI 文档。项目没有身份认证或令牌处理；接入实际业务时自行实现相应规则。
+当前提供两个公开 Ping 样例、OSS 文件上传、ES 同义词词库验证与搜索分析器重载、阿里云 ES 同义词词典查询与更新、实例详情查询接口、MySQL 主从会话入口、Redis、Elasticsearch、阿里云 OSS、阿里云 ES、NATS 默认实例，以及 App/Admin 分模块的 OpenAPI 文档。项目没有身份认证或令牌处理；接入实际业务时自行实现相应规则。
 
 ## 开发环境与启动
 
@@ -79,6 +79,7 @@ go run .
 | GET | `/api/app/ping` | 可选参数 `name`，默认 `world`，最多 32 个字符 |
 | POST | `/api/app/aliyun/oss/upload` | multipart 必填 `file`、`key`，上传单个文件 |
 | POST | `/api/app/elasticsearch/synonyms-validate` | JSON 必填 `synonymsPath`，创建并清理临时索引以验证节点词库 |
+| POST | `/api/app/elasticsearch/synonyms-reload` | JSON 必填 `index`，重载单个实际索引的搜索分析器并清理 request cache |
 | GET | `/api/app/aliyun/es/synonyms-dicts-list` | 无需参数，查询默认阿里云 ES 实例的全部同义词文件 |
 | POST | `/api/app/aliyun/es/synonyms-dicts-update` | JSON 必填 `clientToken`、非空 `dicts`，提交完整目标清单 |
 | GET | `/api/app/aliyun/es/describe-instance` | 无需参数，查询默认阿里云 ES 实例详情 |
@@ -121,6 +122,24 @@ curl -sS 'http://127.0.0.1:8888/api/app/elasticsearch/synonyms-validate' \
 `valid` 仅证明固定分析链在执行节点可加载词库，不证明全节点分发一致或业务召回效果。参数不合法返回业务码 `10001`，创建或清理失败均返回 `400`，省略 `data`，不暴露底层错误详情。失败日志保留 `index`、`valid`、`stage`、`cleanup`、`mayExist` 和错误概要；`mayExist=true` 表示可能遗留索引，需按日志中的 `index` 人工核查。即使 `valid=true`，清理失败仍返回服务错误。
 
 请求取消或超时传递到创建操作；确认创建后的清理不受请求取消影响。创建结果不确定时不会自动删除，不自动重试，避免误删或掩盖不确定结果。
+
+重载同义词搜索分析器时，使用同一个默认 ES 数据面客户端，调用 Pixiu 的 `infra/elasticsearchx` 包中 `(*Client).ReloadSearchAnalyzers` 方法：
+
+```bash
+curl -sS 'http://127.0.0.1:8888/api/app/elasticsearch/synonyms-reload' \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"index":"products"}'
+```
+
+`index` 须为单个实际索引名，符合 ES 小写、最长 255 字节等命名约束；拒绝通配符、逗号列表、`_all`、路径和日期数学表达式，不解析别名或数据流。调用前须将同义词文件更新到所有数据节点（包括未持有该索引分片的节点），`synonym` 或 `synonym_graph` 过滤器设置 `updateable: true`，且仅用于搜索分析器。启用安全功能时客户端须有目标索引的 `manage` 权限；本接口不负责上传或分发词库。
+
+```json
+{"code":0,"msg":"成功","data":{"shards":{"total":1,"successful":1,"failed":0},"reloadDetails":[{"index":"products","reloadedAnalyzers":["search_synonyms"],"reloadedNodeIds":["node-a"]}],"cacheShards":{"total":2,"successful":2,"failed":0}}}
+```
+
+先重载搜索分析器，再仅清理同一索引的 request cache，以避免继续命中旧分析器产生的结果缓存。两次请求共用本次请求的 Context，取消或超时均传递到下游，不自动重试或回滚。`shards` 为重载按节点统计的执行计数，`cacheShards` 为缓存清理的分片计数，两者无需相等。`code=0` 仅表示两步请求均成功；空 `reloadDetails` 或空 `reloadedAnalyzers` 不代表同义词已更新，调用方须检查结果中是否包含预期分析器。
+
+索引名参数错误返回业务码 `10001`；重载或清缓存失败均返回 `400`，省略 `data`，不暴露底层错误详情。失败日志保留 `index`、`reloadShards`、`reloadDetails`、`cacheShards` 与错误概要；清缓存失败时，重载可能已经生效。`cacheShards` 为 null 只表示未取得有效清理响应，不保证清理请求未发送。
 
 查询同义词词典时使用默认阿里云 ES 管理客户端，目标实例来自 `conf/aliyunesx.demo.yaml` 的 `instanceID`：
 
@@ -191,7 +210,7 @@ internal/route/            路由登记
 internal/handler/          参数校验与统一响应
 internal/service/aliyunoss/ 阿里云 OSS 上传业务
 internal/service/aliyunes/ 阿里云 ES 词典管理及实例查询业务
-internal/service/elasticsearch/ ES 数据面同义词词库验证
+internal/service/elasticsearch/ ES 数据面同义词词库验证与搜索分析器重载
 internal/model/            请求和响应结构
 internal/repository/       数据库查询及 GORM 默认主从会话入口
 internal/database/         项目拥有的 Model 迁移清单
@@ -207,7 +226,7 @@ Service 按职责、依赖、状态和生命周期划分。同一领域内职责
 
 `internal/service/aliyunes` 统一使用 `aliyunes.Service` 和 `aliyunes.NewService()`。`service.go` 定义结构体与构造函数，`synonyms.go` 实现 `(*Service).ListSynonymsDicts(ctx)` 和 `(*Service).UpdateSynonymsDicts(ctx, req)`，`instance.go` 实现 `(*Service).DescribeInstance(ctx)`。方法名明确操作对象；请求的 Context 通过方法参数传入，不保存在 Service 中，共享客户端仍由启动阶段管理。
 
-`internal/service/elasticsearch` 使用默认 ES 数据面客户端调用 Pixiu 的 `elasticsearchservice`，负责同义词词库验证；Handler 负责路径参数校验、失败状态日志和响应转换。
+`internal/service/elasticsearch` 使用默认 ES 数据面客户端调用 Pixiu 的 `elasticsearchservice` 验证同义词词库，并通过 `elasticsearchx.ReloadSearchAnalyzers` 重载搜索分析器及清理 request cache；Handler 负责参数校验、失败状态日志和响应转换。
 
 数据库查询放入 `internal/repository/`，Repository 只能由 Service 调用，Handler 不直接访问数据库。沿调用链传递当前操作的 Context；每次查询通过 `DefaultSessions().MasterDB(ctx)` 或 `SlaveDB(ctx)` 选择会话，不缓存请求会话。未配置从库时由 Pixiu 回退到主库。
 

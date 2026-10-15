@@ -22,6 +22,26 @@ type AppElasticsearchValidateSynonymsResponse struct {
 	MayExist bool `json:"mayExist" example:"false"`
 }
 
+type AppElasticsearchReloadSynonymsResponse struct {
+	// Shards 按持有分片的节点统计，不等于索引物理分片数。
+	Shards ElasticsearchShardCounts `json:"shards"`
+	// 空详情或空分析器数组不代表同义词已更新，应检查预期分析器是否出现在结果中。
+	ReloadDetails []ElasticsearchReloadDetail `json:"reloadDetails"`
+	CacheShards   ElasticsearchShardCounts    `json:"cacheShards"`
+}
+
+type ElasticsearchShardCounts struct {
+	Total      int `json:"total" example:"1"`
+	Successful int `json:"successful" example:"1"`
+	Failed     int `json:"failed" example:"0"`
+}
+
+type ElasticsearchReloadDetail struct {
+	Index             string   `json:"index" example:"products"`
+	ReloadedAnalyzers []string `json:"reloadedAnalyzers" example:"search_synonyms"`
+	ReloadedNodeIDs   []string `json:"reloadedNodeIds" example:"node-a"`
+}
+
 type AppESSynonymsDictsListResponse struct {
 	RequestID string               `json:"requestId" example:"es-request-id"`
 	Dicts     []ESSynonymsDictInfo `json:"dicts"`
