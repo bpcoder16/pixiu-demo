@@ -4,9 +4,9 @@
 
 当前提供两个公开 Ping 样例、OSS 文件上传、ES 同义词词库验证与搜索分析器重载、阿里云 ES 同义词词典查询与更新、实例详情查询接口、MySQL 主从会话入口、Redis、Elasticsearch、阿里云 OSS、阿里云 ES、NATS 默认实例，以及 App/Admin 分模块的 OpenAPI 文档。项目没有身份认证或令牌处理；接入实际业务时自行实现相应规则。
 
-应用入口使用 Pixiu 的 `biz/appconfig`，直接将配置传给 `bootstrap.MustBaseInit`；env/log 文件结构保持不变。当前示例继续只启动 HTTP。Cron 独立和混合装配见相邻 Pixiu 仓库的 `examples/cron/README.md`。
+应用入口使用 Pixiu 的 `biz/appconfig`，直接将配置传给 `bootstrap.MustBaseInit`；env/log 文件结构保持不变。HTTP 和 Cron 通过 `bootstrap.Start` 一起运行，示例任务每 10 秒记录一次心跳日志。
 
-HTTP 入口将 `func() (apprun.Service, error)` 构造函数传给 `bootstrap.Start`，由其中的 `bootstrap.NewGinHTTPService(route.Register, modules...)` 按应用环境设置 Gin 模式、读取 gin.yaml、注册文档及业务路由，再读取 http.yaml 构造服务。Pixiu 统一按顺序构造、登记服务并接管 SIGINT/SIGTERM，构造或登记失败时逆序回收已构造服务；项目只声明业务路由、文档模块及服务构造函数，后续 Cron 可追加同签名的构造函数。运行期总关闭预算默认 20 秒，需要自定义预算时可直接使用 `bootstrap.NewAppManager`。
+启动入口将两个 `func() (apprun.Service, error)` 构造函数传给 `bootstrap.Start`：先调用 `bootstrap.NewGinHTTPService(route.Register, modules...)` 装配 HTTP，再通过 `bootstrap.NewCronScheduler` 绑定任务并用 `bootstrap.CronService` 适配 Cron。Pixiu 统一按顺序构造、登记服务并接管 SIGINT/SIGTERM，构造或登记失败时逆序回收已构造服务。运行期总关闭预算默认 20 秒，需要自定义预算时可直接使用 `bootstrap.NewAppManager`。
 
 ## 开发环境与启动
 
@@ -38,6 +38,7 @@ cp -n conf.example/*.yaml conf/
 | [`app.yaml`](conf.example/app.yaml) | 应用名、运行模式、时区、日志目录和轮转 |
 | [`gin.yaml`](conf.example/gin.yaml) | 请求日志、可信代理和详情采集；模板默认开启请求/响应详情 |
 | [`http.yaml`](conf.example/http.yaml) | 监听地址、请求超时和关闭期限，模板监听 `:8888` |
+| [`cron.yaml`](conf.example/cron.yaml) | 心跳任务、执行间隔、任务超时及 Cron 关闭期限 |
 | [`mysql.demo.yaml`](conf.example/mysql.demo.yaml) | 默认 MySQL 主库、可选从库及连接池 |
 | [`migrate.demo.yaml`](conf.example/migrate.demo.yaml) | Model 自动迁移开关和整体期限；模板已开启，当前表清单为空 |
 | [`redis.demo.yaml`](conf.example/redis.demo.yaml) | 默认 Redis 连接、重试和连接池 |
@@ -57,6 +58,24 @@ go run .
 
 入口固定加载 `./conf/app.yaml`，运行时工作目录须包含 `conf/`。`release` 模式关闭文档路由，不要求生成文档；`debug`、`test` 模式在文档未生成时拒绝启动。
 
+## 定时任务
+
+[`internal/cron/heartbeat.go`](internal/cron/heartbeat.go) 的 `Heartbeat` 直接接收调度器传入的 context，记录 `DemoCronHeartbeat`，沿用本轮独立的 `job_name`、`logId` 及耗时作用域，不访问数据库或外部服务。任务在 [`bootstrap/start.go`](bootstrap/start.go) 中绑定为 `heartbeat`，由 [`cron.yaml`](conf.example/cron.yaml) 决定是否启用及执行间隔；首次等待 10 秒，不在构造时执行。
+
+已有本地配置目录时需补齐新文件：
+
+```bash
+cp -n conf.example/cron.yaml conf/
+```
+
+`cron.yaml` 是必需文件，缺失、非法配置或引用未注册任务名会阻止整个应用启动。注释该任务的完整配置项或改为 `jobs: []` 后重启即可停用，保留配置文件。新增任务时在 `internal/cron/` 实现 Handler，通过 `CronHandler` 绑定稳定名称，并在文件的 jobs 中启用。
+
+模板默认启用分布式锁，复用 `MustInit` 中已声明并初始化的 `demo` Redis（连接配置为 `redis.demo.yaml`），锁前缀为 `pixiu-demo:cron:`，TTL 为 30 秒、每 10 秒续租。多实例须连接相同 Redis、DB，并使用相同前缀和稳定任务名；不同应用或环境使用不同前缀。需要无锁运行时删除或注释整个 `lock` 段；保留该段时，Redis 实例必须在构造 Cron 前初始化。
+
+模板沿用 Pixiu 的关闭期限：`shutdownTimeout: 15s` 包含 `drainTimeout: 10s`，两者不相加。停止调度后先等待任务自然结束，排空期到期取消 context，再用剩余预算等待收尾；总期限到期返回错误，不能强杀业务。心跳的任务 timeout 为 2 秒；开启锁的每个任务都须配置正 timeout，任务超时不会提前解锁。任务成功、失败或超时由框架记录 `CronJobResult` 等日志。
+
+HTTP、Cron 依次登记，正常关闭按 Cron → HTTP → 共享客户端 → 日志执行。`bootstrap.Start` 的默认总关闭期限仍为 20 秒；Cron 与 HTTP 的各 15 秒期限受这个共同上限约束，不保证两者均用满。若需覆盖两者完整期限并预留余量，可通过 `bootstrap.NewAppManager` 自定义总关闭期限并登记服务。
+
 ## 日志与标准输出
 
 使用模板中的 `appName: pixiu-demo` 和 `dir: ./log` 时，日志位于应用启动目录下：
@@ -67,10 +86,13 @@ go run .
 | `log/pixiu-demo/biz/info.log` | 默认 Logger 的 Info 日志 |
 | `log/pixiu-demo/biz/wf.log` | 默认 Logger 的 Warn、Error、Fatal 日志 |
 | `log/pixiu-demo/biz/http.*.log` | HTTP 命名 Logger 的分级日志，访问日志写入 `http.info.log` |
+| `log/pixiu-demo/biz/cron.*.log` | Cron 命名 Logger 的分级日志，心跳和成功结果写入 `cron.info.log` |
 | `log/pixiu-demo/std/stdout.log` | stdout 原始输出 |
 | `log/pixiu-demo/std/stderr.log` | stderr 原始输出 |
 
 修改应用名或日志目录后，路径随配置变化。业务日志按模板使用小时轮转，每个分流文件的保留上限为 48 个实际文件（包含当前时段），整点清理完成前可能暂时超限；debug/test 输出 Debug 及以上，release 输出 Info 及以上。
+
+模板的 `log.names` 包含 `http` 和 `cron`；已有 `conf/app.yaml` 时可在该列表加入 `cron` 以启用独立任务日志文件，未声明时 Cron 日志回退到默认 Logger。
 
 `log.hookStd` 默认开启，模板也设置为 true，stdout/stderr 会重定向到上述 `std/` 文件，持续至进程退出。这两个原始输出文件不轮转。该能力仅支持 Linux/macOS；其他平台或需要保留终端标准输出时，在 `conf/app.yaml` 的 `log` 段设置 `hookStd: false`，业务日志仍写入 `biz/` 文件。
 
@@ -207,11 +229,12 @@ curl -sS 'http://127.0.0.1:8888/api/app/aliyun/es/describe-instance'
 
 ```text
 main.go                    配置加载与资源收尾
-bootstrap/                 基础设施注册、HTTP 启动及信号停机
+bootstrap/                 基础设施注册、HTTP/Cron 装配及信号停机
 conf.example/              可共享的配置模板
 errorcode/                 统一业务码和文案
 internal/route/            路由登记
 internal/handler/          参数校验与统一响应
+internal/cron/             定时任务 Handler，当前为心跳示例
 internal/service/aliyunoss/ 阿里云 OSS 上传业务
 internal/service/aliyunes/ 阿里云 ES 词典管理及实例查询业务
 internal/service/elasticsearch/ ES 数据面同义词词库验证与搜索分析器重载
@@ -238,7 +261,7 @@ Service 按职责、依赖、状态和生命周期划分。同一领域内职责
 
 共享客户端由启动阶段初始化并统一关闭，业务代码不自行关闭连接池或修改客户端配置。NATS 消费者应在启动时取得并持有客户端，在所有依赖就绪后注册订阅。
 
-应用退出时先停止 HTTP 入口，再排空 NATS，随后关闭其他基础设施，最后关闭日志。初始化 panic 由 `main` 提前登记的资源栈收尾，并继续传播。
+应用退出时先排空 Cron，再停止 HTTP 入口，随后排空 NATS、关闭其他基础设施，最后关闭日志。初始化 panic 由 `main` 提前登记的资源栈收尾，并继续传播。
 
 [`bootstrap.MustInit`](bootstrap/bootstrap.go) 在共享实例初始化完成后调用 `RunMySQLMigration`，严格读取 `conf/migrate.demo.yaml`，该文件必须存在。模板已设置 `enabled: true`、`timeout: 5m`；当前 [`internal/database.Tables()`](internal/database/models.go) 清单为空，不执行表结构迁移。添加项目业务 Model 后，下次启动会检查并迁移登记的表；需要关闭时，将运行配置中的 `enabled` 设为 false。
 
@@ -254,7 +277,7 @@ bash test/control_test.sh
 gofmt -l bootstrap internal errorcode main.go openapi_test.go openapi
 ```
 
-Go 测试覆盖公开 Ping、OSS 上传、ES 同义词词库验证及清理失败、阿里云 ES 同义词词典查询与更新、实例详情查询、参数边界、请求取消、HTTP 404/405、请求日志作用域、文档核心契约和 HTTP 装配冒烟。OSS、ES 数据面和阿里云 ES 测试使用本地 HTTP 模拟服务，无需启动外部基础设施。控制脚本测试使用模拟进程、端口和 supervise。测试和构建成功不代替真实基础设施连接验证。
+Go 测试覆盖公开 Ping、OSS 上传、ES 同义词词库验证及清理失败、阿里云 ES 同义词词典查询与更新、实例详情查询、参数边界、请求取消、HTTP 404/405、请求日志作用域、文档核心契约和 HTTP 装配冒烟；另验证 Cron 配置错误或模板引用的 Redis 未初始化会阻止启动，以及 Unix 子进程中通过真实 Start 同时提供 HTTP 和执行心跳、SIGTERM 按序关闭后不再调度。混合启动测试使用无锁配置隔离 Redis；OSS、ES 数据面和阿里云 ES 测试使用本地 HTTP 模拟服务，无需启动外部基础设施。控制脚本测试使用模拟进程、端口和 supervise。测试和构建成功不代替真实基础设施连接验证。
 
 ```bash
 make                           # 构建并打包

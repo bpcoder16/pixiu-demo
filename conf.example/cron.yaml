@@ -1,0 +1,30 @@
+# 与 app.yaml 放在同一配置目录，由 bootstrap.NewCronScheduler 严格读取。
+# 命名 Logger 未注册时回退到默认 Logger；app.yaml 的 log.names 已声明 cron。
+loggerName: "cron"
+
+# 整个关闭流程的总预算，包含自然排空和取消后的收尾；零值或省略时默认 15s。
+# 到期仍未结束则返回超时错误，不会强制终止任务。
+shutdownTimeout: "15s"
+# 停止接收新任务后，等待已有任务自然完成的时间；到期取消任务 context，再用剩余预算等待收尾。
+# 零值或省略时取 shutdownTimeout 的 2/3（默认 10s）；须小于总预算，两者不相加。
+drainTimeout: "10s"
+# Cron 与 HTTP 顺序关闭，共享 bootstrap.Start 的 20s 总期限；不保证各自都用满 15s。
+
+# 默认启用分布式锁，复用 MustInit 已在 MustBaseInit 前声明的 demo Redis 实例。
+# 所有节点使用相同 Redis、DB、前缀及稳定任务名；不同应用或环境应使用不同前缀。
+# 不需要分布式锁时删除或注释整个 lock 段。
+lock:
+  redisName: "demo"
+  keyPrefix: "pixiu-demo:cron:"
+  ttl: "30s"
+  renewInterval: "10s"
+
+# 任务名与代码中的 CronHandler.Name 对应；首次等待，不立即执行。
+# 注释整个任务配置项或改为 jobs: [] 后重启可停用任务，文件本身仍须保留。
+# 开启锁时每个任务都必须显式设置正 timeout；超时仅取消 context，不强杀任务或提前解锁。
+jobs:
+  - name: "heartbeat"
+    every: "10s"
+    # 超时仅取消任务 context，业务须配合返回。
+    timeout: "2s"
+    successLevel: "info"
