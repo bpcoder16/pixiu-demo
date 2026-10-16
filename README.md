@@ -60,7 +60,7 @@ go run .
 
 ## 定时任务
 
-[`internal/cron/heartbeat.go`](internal/cron/heartbeat.go) 的 `Heartbeat` 直接接收调度器传入的 context，记录 `DemoCronHeartbeat`，沿用本轮独立的 `job_name`、`logId` 及耗时作用域，不访问数据库或外部服务。任务在 [`bootstrap/cron.go`](bootstrap/cron.go) 的 `CronHandlers()` 中通过 `cron.HeartbeatName` 绑定为 `heartbeat`，由 [`cron.yaml`](conf.example/cron.yaml) 决定是否启用及执行间隔；首次等待 10 秒，不在构造时执行。[`bootstrap/start.go`](bootstrap/start.go) 统一传入 `CronHandlers()...` 构造调度器。
+[`internal/cron/heartbeat.go`](internal/cron/heartbeat.go) 的 `Heartbeat` 直接接收调度器传入的 context，记录 `DemoCronHeartbeat`，沿用本轮独立的 `job_name`、`logId` 及耗时作用域，不访问数据库或外部服务。任务在 [`internal/cron/registry.go`](internal/cron/registry.go) 中通过 Pixiu 的 `bootstrap.MustNewCronRegistry(Heartbeat)` 批量声明，默认取函数名的小写形式 `heartbeat`。[`bootstrap/start.go`](bootstrap/start.go) 统一传入 `cron.Registry.Handlers()...` 构造调度器，由 [`cron.yaml`](conf.example/cron.yaml) 决定是否启用及执行间隔；首次等待 10 秒，不在声明或构造时执行。
 
 已有本地配置目录时需补齐新文件：
 
@@ -68,7 +68,7 @@ go run .
 cp -n conf.example/cron.yaml conf/
 ```
 
-`cron.yaml` 是必需文件，缺失、非法配置或引用未注册任务名会阻止整个应用启动。注释该任务的完整配置项或改为 `jobs: []` 后重启即可停用，保留配置文件。新增任务时在 `internal/cron/` 定义稳定名称常量并实现 Handler，在 `CronHandlers()` 清单中绑定，再在文件的 jobs 中启用，无需继续修改 `Start`。每次调用 `CronHandlers()` 返回独立清单，由调度器构造流程检查任务名称及 Handler。
+`cron.yaml` 是必需文件，缺失、非法配置或引用未注册任务名会阻止整个应用启动。注释该任务的完整配置项或改为 `jobs: []` 后重启即可停用，保留配置文件。新增包级任务时在 `internal/cron/` 实现 Handler，在 `Registry` 的批量声明中增加函数名，再在文件的 jobs 中启用，无需修改 `Start` 或为每个任务编写 `init()`。注册器实例独立，`Handlers()` 返回清单副本；nil、非法名称或重复名称在登记时 panic。闭包、方法值和泛型函数通过 `CronRegistry.MustRegister(handler, name)` 显式命名；函数重命名会影响自动名称的配置绑定和分布式锁标识，需要兼容时显式固定原名称。
 
 模板默认启用分布式锁，复用 `MustInit` 中已声明并初始化的 `demo` Redis（连接配置为 `redis.demo.yaml`），锁前缀为 `pixiu-demo:cron:`，TTL 为 30 秒、每 10 秒续租。多实例须连接相同 Redis、DB，并使用相同前缀和稳定任务名；不同应用或环境使用不同前缀。需要无锁运行时删除或注释整个 `lock` 段；保留该段时，Redis 实例必须在构造 Cron 前初始化。
 

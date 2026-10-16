@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"pixiu-demo/internal/cron"
 	"pixiu-demo/internal/route"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
@@ -18,6 +19,7 @@ import (
 // 此处不重复登记资源关闭函数。
 func Start() error {
 	return bootstrap.Start(
+		// GinHTTPService
 		func() (apprun.Service, error) {
 			return bootstrap.NewGinHTTPService(
 				route.Register,
@@ -25,8 +27,9 @@ func Start() error {
 				ginx.OpenAPIModule{Name: "admin", Title: "Admin"},
 			)
 		},
+		// CronScheduler
 		func() (apprun.Service, error) {
-			scheduler, err := bootstrap.NewCronScheduler(CronHandlers()...)
+			scheduler, err := bootstrap.NewCronScheduler(cron.Registry.Handlers()...)
 			if err != nil {
 				return apprun.Service{}, err
 			}
