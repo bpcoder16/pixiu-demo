@@ -6,6 +6,8 @@
 
 应用入口使用 Pixiu 的 `biz/appconfig`，直接将配置传给 `bootstrap.MustBaseInit`；env/log 文件结构保持不变。当前示例继续只启动 HTTP。Cron 独立和混合装配见相邻 Pixiu 仓库的 `examples/cron/README.md`。
 
+HTTP 入口将 `func() (apprun.Service, error)` 构造函数传给 `bootstrap.Start`，由其中的 `bootstrap.NewGinHTTPService(route.Register, modules...)` 按应用环境设置 Gin 模式、读取 gin.yaml、注册文档及业务路由，再读取 http.yaml 构造服务。Pixiu 统一按顺序构造、登记服务并接管 SIGINT/SIGTERM，构造或登记失败时逆序回收已构造服务；项目只声明业务路由、文档模块及服务构造函数，后续 Cron 可追加同签名的构造函数。运行期总关闭预算默认 20 秒，需要自定义预算时可直接使用 `bootstrap.NewAppManager`。
+
 ## 开发环境与启动
 
 [`go.mod`](go.mod) 声明 Go 1.27.2，通过本地 `replace` 使用相邻目录中的 Pixiu；构建时使用该目录的源码：

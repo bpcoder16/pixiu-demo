@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"pixiu-demo/internal/route"
+
 	"github.com/bpcoder16/pixiu/biz/appconfig"
 	pixiubootstrap "github.com/bpcoder16/pixiu/biz/bootstrap"
 	"github.com/bpcoder16/pixiu/infra/env"
@@ -47,7 +49,11 @@ func TestHTTPAssemblySmoke(t *testing.T) {
 			t.Fatal(err)
 		}
 		gin.SetMode(gin.ReleaseMode)
-		service, err := newHTTPService()
+		service, err := pixiubootstrap.NewGinHTTPService(
+			route.Register,
+			ginx.OpenAPIModule{Name: "app", Title: "App"},
+			ginx.OpenAPIModule{Name: "admin", Title: "Admin"},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}

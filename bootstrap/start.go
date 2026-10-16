@@ -1,15 +1,11 @@
 package bootstrap
 
 import (
-	"errors"
-
 	"pixiu-demo/internal/route"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
 	"github.com/bpcoder16/pixiu/infra/apprun"
-	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/infra/ginx"
-	"github.com/gin-gonic/gin"
 )
 
 // Start 读取 gin.yaml 和 http.yaml，按运行模式注册文档，启动 HTTP 并接管 SIGINT/SIGTERM。
@@ -20,31 +16,11 @@ import (
 // 总关闭超时返回 ErrShutdownTimeout，main 仍尽力清理资源。
 // 此处不重复登记资源关闭函数。
 func Start() error {
-	manager, err := bootstrap.NewAppManager()
-	if err != nil {
-		return err
-	}
-	httpService, httpServiceErr := newHTTPService()
-	if httpServiceErr != nil {
-		return httpServiceErr
-	}
-	if registerErr := manager.Register(httpService); registerErr != nil {
-		return errors.Join(registerErr, httpService.Shutdown())
-	}
-	return manager.RunSignals()
-}
-
-// newHTTPService 在启动阶段设置 Gin 模式，读取配置并构造挂载项目路由的 HTTP 服务。
-// 调用前须初始化 env；服务由调用方注册，监听在 Run 时才启动。
-func newHTTPService() (apprun.Service, error) {
-	gin.SetMode(env.RunMode())
-	handler, err := bootstrap.NewGinEngine(
-		ginx.OpenAPIModule{Name: "app", Title: "App"},
-		ginx.OpenAPIModule{Name: "admin", Title: "Admin"},
-	)
-	if err != nil {
-		return apprun.Service{}, err
-	}
-	route.Register(handler)
-	return bootstrap.NewHTTPService(handler)
+	return bootstrap.Start(func() (apprun.Service, error) {
+		return bootstrap.NewGinHTTPService(
+			route.Register,
+			ginx.OpenAPIModule{Name: "app", Title: "App"},
+			ginx.OpenAPIModule{Name: "admin", Title: "Admin"},
+		)
+	})
 }
