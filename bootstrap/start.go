@@ -1,7 +1,6 @@
 package bootstrap
 
 import (
-	"pixiu-demo/internal/cron"
 	"pixiu-demo/internal/route"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
@@ -27,10 +26,7 @@ func Start() error {
 			)
 		},
 		func() (apprun.Service, error) {
-			scheduler, err := bootstrap.NewCronScheduler(bootstrap.CronHandler{
-				Name:    "heartbeat",
-				Handler: cron.Heartbeat,
-			})
+			scheduler, err := bootstrap.NewCronScheduler(CronHandlers()...)
 			if err != nil {
 				return apprun.Service{}, err
 			}
