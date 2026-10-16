@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bpcoder16/pixiu/biz/appconfig"
 	pixiubootstrap "github.com/bpcoder16/pixiu/biz/bootstrap"
-	"github.com/bpcoder16/pixiu/biz/httpconfig"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/infra/ginx"
 	"github.com/gin-gonic/gin"
@@ -37,7 +37,7 @@ func TestHTTPAssemblySmoke(t *testing.T) {
 		if err := os.WriteFile(appConfigFile, []byte("env:\n  appName: pixiu-demo-test\n  runMode: test\n  timeLocation: UTC\n  localIP: 127.0.0.1\n"), 0600); err != nil {
 			t.Fatal(err)
 		}
-		httpconfig.MustLoadAppConfig(appConfigFile)
+		appconfig.MustLoadAppConfig(appConfigFile)
 		if err := os.WriteFile(filepath.Join(filepath.Dir(configFile), "gin.yaml"), []byte("disableAccessLog: true\n"), 0600); err != nil {
 			t.Fatal(err)
 		}

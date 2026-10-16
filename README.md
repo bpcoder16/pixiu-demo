@@ -4,6 +4,8 @@
 
 当前提供两个公开 Ping 样例、OSS 文件上传、ES 同义词词库验证与搜索分析器重载、阿里云 ES 同义词词典查询与更新、实例详情查询接口、MySQL 主从会话入口、Redis、Elasticsearch、阿里云 OSS、阿里云 ES、NATS 默认实例，以及 App/Admin 分模块的 OpenAPI 文档。项目没有身份认证或令牌处理；接入实际业务时自行实现相应规则。
 
+应用入口使用 Pixiu 的 `biz/appconfig`，直接将配置传给 `bootstrap.MustBaseInit`；env/log 文件结构保持不变。当前示例继续只启动 HTTP。Cron 独立和混合装配见相邻 Pixiu 仓库的 `examples/cron/README.md`。
+
 ## 开发环境与启动
 
 [`go.mod`](go.mod) 声明 Go 1.27.2，通过本地 `replace` 使用相邻目录中的 Pixiu；构建时使用该目录的源码：

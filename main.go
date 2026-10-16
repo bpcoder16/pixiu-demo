@@ -8,12 +8,12 @@ import (
 	// 加载生成的 OpenAPI 文档注册逻辑。
 	_ "pixiu-demo/openapi"
 
-	"github.com/bpcoder16/pixiu/biz/httpconfig"
+	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/lifecycle"
 )
 
 func main() {
-	conf := httpconfig.MustLoadAppConfig("./conf/app.yaml")
+	conf := appconfig.MustLoadAppConfig("./conf/app.yaml")
 
 	var resources lifecycle.Stack
 	// 提前登记收尾，确保初始化 panic 时也能释放已创建的资源。
