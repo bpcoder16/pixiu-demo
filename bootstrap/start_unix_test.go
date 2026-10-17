@@ -26,7 +26,7 @@ func TestHTTPAndCronStartup(t *testing.T) {
 	// 信号仅发送给 isolatedHTTP 创建的测试子进程，避免影响测试主进程。
 	isolatedHTTP(t, func() {
 		addr := initMixedStartConfig(t)
-		// 混合启动验证使用无锁配置以隔离外部 Redis；默认模板的 Redis 前置约束另有覆盖。
+		// 混合启动不启用分布式锁以隔离外部 Redis；显式启用锁时的 Redis 前置约束另有覆盖。
 		writeStartConfig(t, "cron.yaml", "shutdownTimeout: 15s\ndrainTimeout: 10s\njobs:\n  - name: heartbeat\n    every: 100ms\n    timeout: 2s\n")
 		heartbeat := make(chan map[string]any, 1)
 		var runs atomic.Int32

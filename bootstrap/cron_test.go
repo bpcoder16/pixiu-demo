@@ -10,8 +10,30 @@ import (
 	"testing"
 	"time"
 
+	"pixiu-demo/internal/cron"
+
+	pixiubootstrap "github.com/bpcoder16/pixiu/biz/bootstrap"
 	"github.com/bpcoder16/pixiu/infra/env"
 )
+
+func TestDefaultCronTemplateDoesNotRequireRedis(t *testing.T) {
+	// 独立进程中只初始化配置环境，不注册 Redis，直接验证共享模板的构造行为。
+	isolatedHTTP(t, func() {
+		initMixedStartConfig(t)
+		template, err := os.ReadFile("../conf.example/cron.yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeStartConfig(t, "cron.yaml", string(template))
+		scheduler, err := pixiubootstrap.NewCronScheduler(cron.Registry.Handlers()...)
+		if err != nil {
+			t.Fatalf("默认 Cron 模板不应要求已注册 Redis: %v", err)
+		}
+		if err := scheduler.Shutdown(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
 
 func TestCronConfigurationStopsStartup(t *testing.T) {
 	for _, name := range []string{"missing", "unknown-handler", "unregistered-redis"} {
@@ -22,11 +44,7 @@ func TestCronConfigurationStopsStartup(t *testing.T) {
 					writeStartConfig(t, "cron.yaml", "jobs:\n  - name: unknown\n    every: 1s\n")
 				}
 				if name == "unregistered-redis" {
-					template, err := os.ReadFile("../conf.example/cron.yaml")
-					if err != nil {
-						t.Fatal(err)
-					}
-					writeStartConfig(t, "cron.yaml", string(template))
+					writeStartConfig(t, "cron.yaml", "lock:\n  redisName: demo\n  keyPrefix: 'pixiu-demo:cron:'\n")
 				}
 				done := make(chan error, 1)
 				go func() { done <- Start() }()
@@ -39,7 +57,7 @@ func TestCronConfigurationStopsStartup(t *testing.T) {
 						t.Fatalf("未拒绝未知 Cron 任务: %v", err)
 					}
 					if name == "unregistered-redis" && (err == nil || !strings.Contains(err.Error(), `Redis "demo"`)) {
-						t.Fatalf("模板未要求已初始化的 demo Redis: %v", err)
+						t.Fatalf("启用 Cron 分布式锁时应要求已注册的 demo Redis: %v", err)
 					}
 				case <-time.After(5 * time.Second):
 					t.Fatal("Cron 配置错误未阻止应用启动")

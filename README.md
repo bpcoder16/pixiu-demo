@@ -70,7 +70,9 @@ cp -n conf.example/cron.yaml conf/
 
 `cron.yaml` 是必需文件，缺失、非法配置或引用未注册任务名会阻止整个应用启动。注释该任务的完整配置项或改为 `jobs: []` 后重启即可停用，保留配置文件。新增包级任务时在 `internal/cron/` 实现 Handler，在 `Registry` 的批量声明中增加函数名，再在文件的 jobs 中启用，无需修改 `Start` 或为每个任务编写 `init()`。注册器实例独立，`Handlers()` 返回清单副本；nil、非法名称或重复名称在登记时 panic。闭包、方法值和泛型函数通过 `CronRegistry.MustRegister(handler, name)` 显式命名；函数重命名会影响自动名称的配置绑定和分布式锁标识，需要兼容时显式固定原名称。
 
-模板默认启用分布式锁，复用 `MustInit` 中已声明并初始化的 `demo` Redis（连接配置为 `redis.demo.yaml`），锁前缀为 `pixiu-demo:cron:`，TTL 为 30 秒、每 10 秒续租。多实例须连接相同 Redis、DB，并使用相同前缀和稳定任务名；不同应用或环境使用不同前缀。需要无锁运行时删除或注释整个 `lock` 段；保留该段时，Redis 实例必须在构造 Cron 前初始化。
+模板默认不启用分布式锁，构造 Cron 不要求已注册 Redis。同一个 `Scheduler` 实例内，同名任务在上一轮 Handler 实际返回前不会重入，后续重叠触发直接跳过、不排队；即使任务已超时，也要等待 Handler 返回后才释放执行位置。不同任务可以并行，该防重入约束不跨进程或调度器实例。
+
+需要跨实例互斥时，取消整个 `lock` 段的注释，复用 `MustInit` 中已声明并初始化的 `demo` Redis（连接配置为 `redis.demo.yaml`），锁前缀为 `pixiu-demo:cron:`，TTL 为 30 秒、每 10 秒续租。多实例须连接相同 Redis、DB，并使用相同前缀和稳定任务名；不同应用或环境使用不同前缀。启用该段时，Redis 实例必须在构造 Cron 前初始化。
 
 模板沿用 Pixiu 的关闭期限：`shutdownTimeout: 15s` 包含 `drainTimeout: 10s`，两者不相加。停止调度后先等待任务自然结束，排空期到期取消 context，再用剩余预算等待收尾；总期限到期返回错误，不能强杀业务。心跳的任务 timeout 为 2 秒；开启锁的每个任务都须配置正 timeout，任务超时不会提前解锁。任务成功、失败或超时由框架记录 `CronJobResult` 等日志。
 
@@ -277,7 +279,7 @@ bash test/control_test.sh
 gofmt -l bootstrap internal errorcode main.go openapi_test.go openapi
 ```
 
-Go 测试覆盖公开 Ping、OSS 上传、ES 同义词词库验证及清理失败、阿里云 ES 同义词词典查询与更新、实例详情查询、参数边界、请求取消、HTTP 404/405、请求日志作用域、文档核心契约和 HTTP 装配冒烟；另验证 Cron 配置错误或模板引用的 Redis 未初始化会阻止启动，以及 Unix 子进程中通过真实 Start 同时提供 HTTP 和执行心跳、SIGTERM 按序关闭后不再调度。混合启动测试使用无锁配置隔离 Redis；OSS、ES 数据面和阿里云 ES 测试使用本地 HTTP 模拟服务，无需启动外部基础设施。控制脚本测试使用模拟进程、端口和 supervise。测试和构建成功不代替真实基础设施连接验证。
+Go 测试覆盖公开 Ping、OSS 上传、ES 同义词词库验证及清理失败、阿里云 ES 同义词词典查询与更新、实例详情查询、参数边界、请求取消、HTTP 404/405、请求日志作用域、文档核心契约和 HTTP 装配冒烟；另验证默认模板构造 Cron 不要求已注册 Redis，而 Cron 配置错误或显式启用锁时引用的 Redis 未初始化会阻止启动，以及 Unix 子进程中通过真实 Start 同时提供 HTTP 和执行心跳、SIGTERM 按序关闭后不再调度。混合启动测试不启用分布式锁以隔离 Redis；OSS、ES 数据面和阿里云 ES 测试使用本地 HTTP 模拟服务，无需启动外部基础设施。控制脚本测试使用模拟进程、端口和 supervise。测试和构建成功不代替真实基础设施连接验证。
 
 ```bash
 make                           # 构建并打包

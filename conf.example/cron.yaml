@@ -10,14 +10,15 @@ shutdownTimeout: "15s"
 drainTimeout: "10s"
 # Cron 与 HTTP 顺序关闭，共享 bootstrap.Start 的 20s 总期限；不保证各自都用满 15s。
 
-# 默认启用分布式锁，复用 MustInit 已在 MustBaseInit 前声明的 demo Redis 实例。
+# 默认不启用分布式锁；同一 Scheduler 内，同名任务重叠触发直接跳过、不排队。
+# 上一轮 Handler 实际返回前不会重入，即使已超时；该约束不跨进程或 Scheduler 实例。
+# 需要跨实例互斥时取消整个 lock 段的注释，启用后复用 MustInit 声明并初始化的 demo Redis 实例。
 # 所有节点使用相同 Redis、DB、前缀及稳定任务名；不同应用或环境应使用不同前缀。
-# 不需要分布式锁时删除或注释整个 lock 段。
-lock:
-  redisName: "demo"
-  keyPrefix: "pixiu-demo:cron:"
-  ttl: "30s"
-  renewInterval: "10s"
+#lock:
+#  redisName: "demo"
+#  keyPrefix: "pixiu-demo:cron:"
+#  ttl: "30s"
+#  renewInterval: "10s"
 
 # 任务名与代码中的 CronHandler.Name 对应；首次等待，不立即执行。
 # 注释整个任务配置项或改为 jobs: [] 后重启可停用任务，文件本身仍须保留。
