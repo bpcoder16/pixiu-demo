@@ -17,6 +17,8 @@ import (
 )
 
 // MustInit 声明 MySQL、Redis、Elasticsearch、阿里云 OSS、阿里云 ES 和 NATS 实例，再执行通用和项目初始化。
+// MustBaseInit 先应用时区，再按日志、OSS、阿里云 ES、MySQL、Redis、Elasticsearch、NATS 的顺序初始化，随后执行迁移。
+// 成功返回后再创建和保存模块 Logger；不要在包级变量或 init 中提前缓存。
 // 两层共用由 main 创建和关闭的资源栈，初始化失败时 panic。
 func MustInit(config *appconfig.AppConfig, resources *lifecycle.Stack) {
 	bootstrap.MustRegisterMySQL(mysql.DemoName, true)

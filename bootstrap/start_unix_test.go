@@ -27,7 +27,7 @@ func TestHTTPAndCronStartup(t *testing.T) {
 	isolatedHTTP(t, func() {
 		addr := initMixedStartConfig(t)
 		// 混合启动不启用分布式锁以隔离外部 Redis；显式启用锁时的 Redis 前置约束另有覆盖。
-		writeStartConfig(t, "cron.yaml", "shutdownTimeout: 15s\ndrainTimeout: 10s\njobs:\n  - name: heartbeat\n    every: 100ms\n    timeout: 2s\n")
+		writeStartConfig(t, "cron.yaml", "shutdownTimeout: 15s\ndrainTimeout: 10s\njobs:\n  - name: Heartbeat\n    every: 100ms\n    timeout: 2s\n")
 		heartbeat := make(chan map[string]any, 1)
 		var runs atomic.Int32
 		var shutdowns []string
@@ -106,7 +106,7 @@ func TestHTTPAndCronStartup(t *testing.T) {
 		defer stop()
 		select {
 		case record := <-heartbeat:
-			if record["job_name"] != "heartbeat" || record["logId"] == nil {
+			if record["job_name"] != "Heartbeat" || record["logId"] == nil {
 				t.Fatalf("心跳日志缺少任务作用域字段: %v", record)
 			}
 		case <-time.After(3 * time.Second):

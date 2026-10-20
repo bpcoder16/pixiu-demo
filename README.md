@@ -49,6 +49,8 @@ cp -n conf.example/*.yaml conf/
 
 基础设施实例名统一为 `demo`，由 `bootstrap.MustInit` 注册；配置文件中无需再次指定实例名或默认标识。启动会初始化全部六类基础设施，即使只访问 Ping，也需完成初始化。阿里云 OSS 和阿里云 ES 初始化只校验配置并构造客户端，不联网验活；实际访问时再验证凭据、权限和资源可用性。
 
+实例声明完成后，`MustBaseInit` 先应用环境时区，再依次初始化日志 → 阿里云 OSS → 阿里云 ES → MySQL → Redis → Elasticsearch → NATS。随后 `MustInit` 执行 MySQL 迁移，成功返回后再由 `Start` 构造并启动 HTTP、Cron；声明实例的调用顺序不决定实际初始化顺序。
+
 模板使用 `debug` 模式，启动前须生成接口文档：
 
 ```bash
@@ -60,7 +62,7 @@ go run .
 
 ## 定时任务
 
-[`internal/cron/heartbeat.go`](internal/cron/heartbeat.go) 的 `Heartbeat` 直接接收调度器传入的 context，记录 `DemoCronHeartbeat`，沿用本轮独立的 `job_name`、`logId` 及耗时作用域，不访问数据库或外部服务。任务在 [`internal/cron/registry.go`](internal/cron/registry.go) 中通过 Pixiu 的 `bootstrap.MustNewCronRegistry(Heartbeat)` 批量声明，默认取函数名的小写形式 `heartbeat`。[`bootstrap/start.go`](bootstrap/start.go) 统一传入 `cron.Registry.Handlers()...` 构造调度器，由 [`cron.yaml`](conf.example/cron.yaml) 决定是否启用及执行间隔；首次等待 10 秒，不在声明或构造时执行。
+[`internal/cron/heartbeat.go`](internal/cron/heartbeat.go) 的 `Heartbeat` 直接接收调度器传入的 context，记录 `DemoCronHeartbeat`，沿用本轮独立的 `job_name`、`logId` 及耗时作用域，不访问数据库或外部服务。任务在 [`internal/cron/registry.go`](internal/cron/registry.go) 中通过 Pixiu 的 `bootstrap.MustNewCronRegistry(Heartbeat)` 批量声明，默认使用原始函数名 `Heartbeat`，保留大小写。[`bootstrap/start.go`](bootstrap/start.go) 统一传入 `cron.Registry.Handlers()...` 构造调度器，由 [`cron.yaml`](conf.example/cron.yaml) 决定是否启用及执行间隔；首次等待 10 秒，不在声明或构造时执行。
 
 已有本地配置目录时需补齐新文件：
 
@@ -68,7 +70,7 @@ go run .
 cp -n conf.example/cron.yaml conf/
 ```
 
-`cron.yaml` 是必需文件，缺失、非法配置或引用未注册任务名会阻止整个应用启动。注释该任务的完整配置项或改为 `jobs: []` 后重启即可停用，保留配置文件。新增包级任务时在 `internal/cron/` 实现 Handler，在 `Registry` 的批量声明中增加函数名，再在文件的 jobs 中启用，无需修改 `Start` 或为每个任务编写 `init()`。注册器实例独立，`Handlers()` 返回清单副本；nil、非法名称或重复名称在登记时 panic。闭包、方法值和泛型函数通过 `CronRegistry.MustRegister(handler, name)` 显式命名；函数重命名会影响自动名称的配置绑定和分布式锁标识，需要兼容时显式固定原名称。
+`cron.yaml` 是必需文件，缺失、非法配置或引用未注册任务名会阻止整个应用启动。配置按任务名精确匹配，区分大小写；自动命名的 `Heartbeat` 必须配置为 `name: Heartbeat`，旧配置中的 `heartbeat` 需同步修改。注释该任务的完整配置项或改为 `jobs: []` 后重启即可停用，保留配置文件。新增包级任务时在 `internal/cron/` 实现 Handler，在 `Registry` 的批量声明中增加函数名，再在文件的 jobs 中启用，无需修改 `Start` 或为每个任务编写 `init()`。注册器实例独立，`Handlers()` 返回清单副本；nil、非法名称或完全相同的名称在登记时 panic，仅大小写不同的名称视为不同任务。闭包、方法值和泛型函数通过 `CronRegistry.MustRegister(handler, name)` 显式命名；函数重命名会影响自动名称的配置绑定和分布式锁标识，需要兼容时显式固定原名称。
 
 模板默认不启用分布式锁，构造 Cron 不要求已注册 Redis。同一个 `Scheduler` 实例内，同名任务在上一轮 Handler 实际返回前不会重入，后续重叠触发直接跳过、不排队；即使任务已超时，也要等待 Handler 返回后才释放执行位置。不同任务可以并行，该防重入约束不跨进程或调度器实例。
 
@@ -263,7 +265,9 @@ Service 按职责、依赖、状态和生命周期划分。同一领域内职责
 
 共享客户端由启动阶段初始化并统一关闭，业务代码不自行关闭连接池或修改客户端配置。NATS 消费者应在启动时取得并持有客户端，在所有依赖就绪后注册订阅。
 
-应用退出时先排空 Cron，再停止 HTTP 入口，随后排空 NATS、关闭其他基础设施，最后关闭日志。初始化 panic 由 `main` 提前登记的资源栈收尾，并继续传播。
+模块 Logger 必须在 `bootstrap.MustInit` 成功返回后创建和保存，不要在包级变量或 `init()` 中调用并缓存 `logit.Default()`、`logit.With(...)`、`logit.Named(...)`。初始化前默认日志保持静默，提前取得的 Logger 不会随后续初始化自动切换。当前业务代码在 Handler 或 Cron 任务执行时调用日志便捷函数，没有提前缓存模块 Logger；包级 `cron.Registry` 只登记任务声明，不执行任务或取得 Logger。
+
+应用退出时先排空 Cron，再停止 HTTP 入口，随后由 `main` 的资源栈按初始化的逆序排空或关闭 NATS → Elasticsearch → Redis → MySQL → 阿里云 ES → 阿里云 OSS → 日志，保证其他组件关闭时仍可记录日志。初始化 panic 时，资源栈只逆序回收已登记的资源，并继续传播 panic。
 
 [`bootstrap.MustInit`](bootstrap/bootstrap.go) 在共享实例初始化完成后调用 `RunMySQLMigration`，严格读取 `conf/migrate.demo.yaml`，该文件必须存在。模板已设置 `enabled: true`、`timeout: 5m`；当前 [`internal/database.Tables()`](internal/database/models.go) 清单为空，不执行表结构迁移。添加项目业务 Model 后，下次启动会检查并迁移登记的表；需要关闭时，将运行配置中的 `enabled` 设为 false。
 

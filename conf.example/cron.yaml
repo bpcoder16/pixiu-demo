@@ -20,11 +20,12 @@ drainTimeout: "10s"
 #  ttl: "30s"
 #  renewInterval: "10s"
 
-# 任务名与代码中的 CronHandler.Name 对应；首次等待，不立即执行。
+# 任务名须与代码中的 CronHandler.Name 完全一致，区分大小写；自动名称为原始函数名。
+# 首次等待，不立即执行。
 # 注释整个任务配置项或改为 jobs: [] 后重启可停用任务，文件本身仍须保留。
 # 开启锁时每个任务都必须显式设置正 timeout；超时仅取消 context，不强杀任务或提前解锁。
 jobs:
-  - name: "heartbeat"
+  - name: "Heartbeat"
     every: "10s"
     # 超时仅取消任务 context，业务须配合返回。
     timeout: "2s"
