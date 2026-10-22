@@ -2,13 +2,7 @@
 # 命名 Logger 未注册时回退到默认 Logger；app.yaml 的 log.names 已声明 cron。
 loggerName: "cron"
 
-# 整个关闭流程的总预算，包含自然排空和取消后的收尾；零值或省略时默认 15s。
-# 到期仍未结束则返回超时错误，不会强制终止任务。
-shutdownTimeout: "15s"
-# 停止接收新任务后，等待已有任务自然完成的时间；到期取消任务 context，再用剩余预算等待收尾。
-# 零值或省略时取 shutdownTimeout 的 2/3（默认 10s）；须小于总预算，两者不相加。
-drainTimeout: "10s"
-# Cron 与 HTTP 顺序关闭，共享 bootstrap.Start 的 20s 总期限；不保证各自都用满 15s。
+# 服务统一停收并共享 30s 排空期限；到期取消剩余任务。
 
 # 默认不启用分布式锁；同一 Scheduler 内，同名任务重叠触发直接跳过、不排队。
 # 上一轮 Handler 实际返回前不会重入，即使已超时；该约束不跨进程或 Scheduler 实例。
@@ -21,12 +15,21 @@ drainTimeout: "10s"
 #  renewInterval: "10s"
 
 # 任务名须与代码中的 CronHandler.Name 完全一致，区分大小写；自动名称为原始函数名。
-# 首次等待，不立即执行。
+# 每个任务的 every、cron、randomEvery 只能选一种；固定及随机间隔首次等待，不立即执行。
+# cron 为秒起始的六字段，使用 app.yaml 的 env.timeLocation，不接受内嵌时区或描述符。
+# every 与 randomEvery.min 最短均为 100ms；randomEvery.max 必须大于 min，随机间隔为 [min, max)。
 # 注释整个任务配置项或改为 jobs: [] 后重启可停用任务，文件本身仍须保留。
 # 开启锁时每个任务都必须显式设置正 timeout；超时仅取消 context，不强杀任务或提前解锁。
 jobs:
   - name: "Heartbeat"
     every: "10s"
+    # 切换调度方式时先注释 every，再选择下面一种并取消其完整配置段的注释。
+    # 每天 00:10:00 执行：
+    # cron: "0 10 0 * * *"
+    # 随机等待 15 分钟（含）至 20 分钟（不含）：
+    # randomEvery:
+    #   min: "15m"
+    #   max: "20m"
     # 超时仅取消任务 context，业务须配合返回。
     timeout: "2s"
     successLevel: "info"

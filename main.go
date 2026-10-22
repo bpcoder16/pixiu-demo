@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"time"
 
 	"pixiu-demo/bootstrap"
 
@@ -15,7 +16,8 @@ import (
 func main() {
 	conf := appconfig.MustLoadAppConfig("./conf/app.yaml")
 
-	var resources lifecycle.Stack
+	// 全部资源共享 20 秒回收期限。
+	resources, _ := lifecycle.New(20 * time.Second)
 	// 提前登记收尾，确保初始化 panic 时也能释放已创建的资源。
 	defer func() {
 		if err := resources.Close(); err != nil {
@@ -24,7 +26,7 @@ func main() {
 		}
 	}()
 
-	bootstrap.MustInit(conf, &resources)
+	bootstrap.MustInit(conf, resources)
 	if err := bootstrap.Start(); err != nil {
 		log.Printf("server exit: %v", err)
 	}

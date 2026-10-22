@@ -25,11 +25,11 @@ func TestDefaultCronTemplateDoesNotRequireRedis(t *testing.T) {
 			t.Fatal(err)
 		}
 		writeStartConfig(t, "cron.yaml", string(template))
-		scheduler, err := pixiubootstrap.NewCronScheduler(cron.Registry.Handlers()...)
+		service, err := pixiubootstrap.NewCronService(cron.Registry.Handlers()...)
 		if err != nil {
 			t.Fatalf("默认 Cron 模板不应要求已注册 Redis: %v", err)
 		}
-		if err := scheduler.Shutdown(); err != nil {
+		if err := stopAndWait(service.Stop, service.Wait, service.Cancel); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -40,6 +40,8 @@ func TestCronConfigurationStopsStartup(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			isolatedHTTP(t, func() {
 				addr := initMixedStartConfig(t)
+				client := newExampleClient(t, startExampleServer(t), "demo", true)
+				writeExampleRegistration(t, "demo")
 				if name == "unknown-handler" {
 					writeStartConfig(t, "cron.yaml", "jobs:\n  - name: unknown\n    every: 1s\n")
 				}
@@ -61,6 +63,9 @@ func TestCronConfigurationStopsStartup(t *testing.T) {
 					}
 				case <-time.After(5 * time.Second):
 					t.Fatal("Cron 配置错误未阻止应用启动")
+				}
+				if client.Conn().IsClosed() || client.Conn().NumSubscriptions() != 0 {
+					t.Fatal("后续工厂失败不应启动 NATS 消费或提前关闭共享连接")
 				}
 				listener, err := net.Listen("tcp", addr)
 				if err != nil {
@@ -90,7 +95,7 @@ func initMixedStartConfig(t *testing.T) string {
 		t.Fatal(err)
 	}
 	writeStartConfig(t, "gin.yaml", "disableAccessLog: true\n")
-	writeStartConfig(t, "http.yaml", fmt.Sprintf("addr: %q\nshutdownTimeout: 1s\n", addr))
+	writeStartConfig(t, "http.yaml", fmt.Sprintf("addr: %q\n", addr))
 	return addr
 }
 

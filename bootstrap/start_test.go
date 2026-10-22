@@ -32,7 +32,7 @@ func TestHTTPAssemblySmoke(t *testing.T) {
 		addr := listener.Addr().String()
 		_ = listener.Close()
 		configFile := filepath.Join(t.TempDir(), "http.yaml")
-		if err := os.WriteFile(configFile, fmt.Appendf(nil, "addr: %q\nshutdownTimeout: 1s\n", addr), 0600); err != nil {
+		if err := os.WriteFile(configFile, fmt.Appendf(nil, "addr: %q\n", addr), 0600); err != nil {
 			t.Fatal(err)
 		}
 		appConfigFile := filepath.Join(filepath.Dir(configFile), "app.yaml")
@@ -51,13 +51,19 @@ func TestHTTPAssemblySmoke(t *testing.T) {
 		gin.SetMode(gin.ReleaseMode)
 		service, err := pixiubootstrap.NewGinHTTPService(
 			route.Register,
-			ginx.OpenAPIModule{Name: "app", Title: "App"},
-			ginx.OpenAPIModule{Name: "admin", Title: "Admin"},
+			ginx.OpenAPIModule{
+				Name:  "app",
+				Title: "App",
+			},
+			ginx.OpenAPIModule{
+				Name:  "admin",
+				Title: "Admin",
+			},
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer service.Shutdown()
+		defer stopAndWait(service.Stop, service.Wait, service.Cancel)
 		if gin.Mode() != env.RunMode() {
 			t.Fatalf("Gin 模式未跟随应用配置: %s", gin.Mode())
 		}

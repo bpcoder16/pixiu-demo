@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"pixiu-demo/internal/cron"
+	"pixiu-demo/internal/infra/nats"
 	"pixiu-demo/internal/route"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
@@ -9,17 +10,17 @@ import (
 	"github.com/bpcoder16/pixiu/infra/ginx"
 )
 
-// Start 读取 gin.yaml、http.yaml 和 cron.yaml，统一启动 HTTP、Cron 并接管 SIGINT/SIGTERM。
-// 启动阶段串行设置 Gin 全局模式，再构造路由；运行期间不切换模式。
-// 先构造 HTTP 再构造 Cron，正常关闭时先排空 Cron 再关闭 HTTP，之后由 main 回收共享资源。
-// 共享资源按 NATS、Elasticsearch、Redis、MySQL、阿里云 ES、OSS、日志的顺序关闭。
-// RunSignals 内部创建后台 context，管理停机通知及信号订阅。
-// main 记录运行或关闭错误，在管理器返回后回收共享客户端和日志，然后正常返回。
-// HTTP 关闭超时后不额外等待 handler,直接进入资源清理。
-// 总关闭超时返回 ErrShutdownTimeout，main 仍尽力清理资源。
-// 此处不重复登记资源关闭函数。
+// Start 构造 NATS 消费组件、HTTP、Cron，统一运行并接管 SIGINT/SIGTERM。
+// 构造时串行设置 Gin 全局模式，运行期间不切换模式。
+// 收到信号统一停收 HTTP、Cron 和 NATS，最多共享 30 秒等待实际排空。
+// 排空超时取消剩余任务；main 始终回收共享资源，默认总回收期限 20 秒，日志最后关闭。
 func Start() error {
 	return bootstrap.Start(
+		// NewNATSConsumerService
+		func() (apprun.Service, error) {
+			jetStreamHandlers, coreHandlers := newNATSRegistries()
+			return bootstrap.NewNATSConsumerService(nats.DemoName, jetStreamHandlers, coreHandlers)
+		},
 		// GinHTTPService
 		func() (apprun.Service, error) {
 			return bootstrap.NewGinHTTPService(
@@ -28,13 +29,9 @@ func Start() error {
 				ginx.OpenAPIModule{Name: "admin", Title: "Admin"},
 			)
 		},
-		// CronScheduler
+		// NewCronService
 		func() (apprun.Service, error) {
-			scheduler, err := bootstrap.NewCronScheduler(cron.Registry.Handlers()...)
-			if err != nil {
-				return apprun.Service{}, err
-			}
-			return bootstrap.CronService(scheduler), nil
+			return bootstrap.NewCronService(cron.Registry.Handlers()...)
 		},
 	)
 }

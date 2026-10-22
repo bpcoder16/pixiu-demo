@@ -22,15 +22,18 @@ type cronLogWriter func([]byte) (int, error)
 
 func (w cronLogWriter) Write(p []byte) (int, error) { return w(p) }
 
-func TestHTTPAndCronStartup(t *testing.T) {
+func TestNATSHTTPAndCronStartup(t *testing.T) {
 	// 信号仅发送给 isolatedHTTP 创建的测试子进程，避免影响测试主进程。
 	isolatedHTTP(t, func() {
 		addr := initMixedStartConfig(t)
+		natsClient := newExampleClient(t, startExampleServer(t), "demo", true)
+		writeExampleRegistration(t, "demo")
 		// 混合启动不启用分布式锁以隔离外部 Redis；显式启用锁时的 Redis 前置约束另有覆盖。
-		writeStartConfig(t, "cron.yaml", "shutdownTimeout: 15s\ndrainTimeout: 10s\njobs:\n  - name: Heartbeat\n    every: 100ms\n    timeout: 2s\n")
+		writeStartConfig(t, "cron.yaml", "jobs:\n  - name: Heartbeat\n    every: 100ms\n    timeout: 2s\n")
 		heartbeat := make(chan map[string]any, 1)
 		var runs atomic.Int32
 		var shutdowns []string
+		var shutdownMu sync.Mutex
 		logger := logit.MustNew(
 			logit.OptEncoder(logit.DefaultJSONEncoder),
 			logit.OptWriter(logit.NewWriter(cronLogWriter(func(p []byte) (int, error) {
@@ -46,8 +49,10 @@ func TestHTTPAndCronStartup(t *testing.T) {
 					case heartbeat <- record:
 					default:
 					}
-				case "AppServiceShutdown":
+				case "AppServiceStopped":
+					shutdownMu.Lock()
 					shutdowns = append(shutdowns, record["service"].(string))
+					shutdownMu.Unlock()
 				}
 				return len(p), nil
 			}))),
@@ -85,7 +90,7 @@ func TestHTTPAndCronStartup(t *testing.T) {
 		if !ready {
 			t.Fatal("HTTP 未就绪")
 		}
-		// HTTP 已监听意味着 RunSignals 已安装信号处理，此后失败也须停止两个服务。
+		// HTTP 已监听意味着 RunSignals 已安装信号处理，此后失败也须停止三个服务。
 		stop := sync.OnceFunc(func() {
 			process, err := os.FindProcess(os.Getpid())
 			if err != nil {
@@ -113,8 +118,12 @@ func TestHTTPAndCronStartup(t *testing.T) {
 			t.Fatal("未执行示例心跳任务")
 		}
 		stop()
-		if !slices.Equal(shutdowns, []string{"cron", "http"}) {
-			t.Fatalf("关闭顺序 = %v，预期先 Cron 后 HTTP", shutdowns)
+		slices.Sort(shutdowns)
+		if !slices.Equal(shutdowns, []string{"cron", "http", "nats:demo"}) {
+			t.Fatalf("完成停收的服务 = %v", shutdowns)
+		}
+		if natsClient.Conn().IsClosed() {
+			t.Fatal("Start 应只停止消费，保留 NATS 连接供资源栈关闭")
 		}
 		completed := runs.Load()
 		time.Sleep(250 * time.Millisecond)
