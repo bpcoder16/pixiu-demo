@@ -118,7 +118,7 @@ curl -sS -X POST 'http://127.0.0.1:8888/api/app/nats/publish'
 
 ## 定时任务
 
-[`internal/cron/heartbeat.go`](internal/cron/heartbeat.go) 的 `Heartbeat` 直接接收调度器传入的 context，记录 `DemoCronHeartbeat`，沿用本轮独立的 `job_name`、`logId` 及耗时作用域，不访问数据库或外部服务。任务在 [`internal/cron/registry.go`](internal/cron/registry.go) 中通过 Pixiu 的 `infra/cronx` 包提供的 `cronx.MustNewHandlerRegistry(Heartbeat)` 批量声明，默认使用原始函数名 `Heartbeat`，保留大小写。[`bootstrap/start.go`](bootstrap/start.go) 调用 `bootstrap.NewCronService(cron.Registry.Handlers()...)` 完成调度器构造与服务适配，由 [`cron.yaml`](conf.example/cron.yaml) 决定是否启用及执行间隔；首次等待 10 秒，不在声明或构造时执行。
+[`internal/cronhandler/heartbeat.go`](internal/cronhandler/heartbeat.go) 的 `Heartbeat` 直接接收调度器传入的 context，记录 `DemoCronHeartbeat`，沿用本轮独立的 `job_name`、`logId` 及耗时作用域，不访问数据库或外部服务。任务在 [`internal/cronhandler/registry.go`](internal/cronhandler/registry.go) 中通过 Pixiu 的 `infra/cronx` 包提供的 `cronx.MustNewHandlerRegistry(Heartbeat)` 批量声明，默认使用原始函数名 `Heartbeat`，保留大小写。[`bootstrap/start.go`](bootstrap/start.go) 调用 `bootstrap.NewCronService(cronhandler.Registry.Handlers()...)` 完成调度器构造与服务适配，由 [`cron.yaml`](conf.example/cron.yaml) 决定是否启用及执行间隔；首次等待 10 秒，不在声明或构造时执行。
 
 每个任务必须在 `every`、`cron`、`randomEvery` 中恰好选择一种调度方式。模板默认使用 `every: "10s"`，并提供另外两种方式的注释示例；切换时先注释原调度字段，再取消所选配置段的完整注释，不能同时启用。`cron: "0 10 0 * * *"` 表示每天 00:10:00 执行，使用 `app.yaml` 的 `env.timeLocation`；表达式必须为秒起始的六字段，不接受内嵌时区或描述符。`every` 和 `randomEvery.min` 最短均为 100ms，`randomEvery.max` 必须大于 min；随机示例的 min 为 15m、max 为 20m，间隔范围为 `[min, max)`。固定及随机间隔首次等待，不立即执行。
 
@@ -128,7 +128,7 @@ curl -sS -X POST 'http://127.0.0.1:8888/api/app/nats/publish'
 cp -n conf.example/cron.yaml conf/
 ```
 
-`cron.yaml` 是必需文件，缺失、非法配置或引用未注册任务名会阻止整个应用启动。配置按任务名精确匹配，区分大小写；自动命名的 `Heartbeat` 必须配置为 `name: Heartbeat`，旧配置中的 `heartbeat` 需同步修改。注释该任务的完整配置项或改为 `jobs: []` 后重启即可停用，保留配置文件。新增包级任务时在 `internal/cron/` 实现 Handler，在 `Registry` 的批量声明中增加函数名，再在文件的 jobs 中启用，无需修改 `Start` 或为每个任务编写 `init()`。注册器实例独立，`Handlers()` 返回清单副本；nil、非法名称或完全相同的名称在登记时 panic，仅大小写不同的名称视为不同任务。闭包、方法值和泛型函数通过 `cronx.HandlerRegistry.MustRegister(handler, name)` 显式命名；函数重命名会影响自动名称的配置绑定和分布式锁标识，需要兼容时显式固定原名称。
+`cron.yaml` 是必需文件，缺失、非法配置或引用未注册任务名会阻止整个应用启动。配置按任务名精确匹配，区分大小写；自动命名的 `Heartbeat` 必须配置为 `name: Heartbeat`，旧配置中的 `heartbeat` 需同步修改。注释该任务的完整配置项或改为 `jobs: []` 后重启即可停用，保留配置文件。新增包级任务时在 `internal/cronhandler/` 实现 Handler，在 `Registry` 的批量声明中增加函数名，再在文件的 jobs 中启用，无需修改 `Start` 或为每个任务编写 `init()`。注册器实例独立，`Handlers()` 返回清单副本；nil、非法名称或完全相同的名称在登记时 panic，仅大小写不同的名称视为不同任务。闭包、方法值和泛型函数通过 `cronx.HandlerRegistry.MustRegister(handler, name)` 显式命名；函数重命名会影响自动名称的配置绑定和分布式锁标识，需要兼容时显式固定原名称。
 
 模板默认不启用分布式锁，构造 Cron 不要求已注册 Redis。同一个 `Scheduler` 实例内，同名任务在上一轮 Handler 实际返回前不会重入，后续重叠触发直接跳过、不排队；即使任务已超时，也要等待 Handler 返回后才释放执行位置。不同任务可以并行，该防重入约束不跨进程或调度器实例。
 
@@ -297,7 +297,7 @@ internal/route/            路由登记
 internal/httphandler/      HTTP 参数校验与统一响应
 internal/natshandler/      NATS 消息适配、Service 调用及注册清单
 internal/natspublisher/    NATS 消息编码、实际发布与确认
-internal/cron/             定时任务 Handler，当前为心跳示例
+internal/cronhandler/      定时任务 Handler，当前为心跳示例
 internal/service/aliyunoss/ 阿里云 OSS 上传业务
 internal/service/aliyunes/ 阿里云 ES 词典管理及实例查询业务
 internal/service/elasticsearch/ ES 数据面同义词词库验证与搜索分析器重载
@@ -331,7 +331,7 @@ Service 按职责、依赖、状态和生命周期划分。同一领域内职责
 
 共享客户端由启动阶段初始化并统一关闭，业务代码不自行关闭连接池或修改客户端配置。NATS 消费者在所有依赖就绪后注册订阅，发布服务可提前构造复用，也可按调用创建。
 
-模块 Logger 必须在 `bootstrap.MustInit` 成功返回后创建和保存，不要在包级变量或 `init()` 中调用并缓存 `logit.Default()`、`logit.With(...)`、`logit.Named(...)`。初始化前默认日志保持静默，提前取得的 Logger 不会随后续初始化自动切换。当前业务代码在 Handler 或 Cron 任务执行时调用日志便捷函数，没有提前缓存模块 Logger；包级 `cron.Registry` 只登记任务声明，不执行任务或取得 Logger。
+模块 Logger 必须在 `bootstrap.MustInit` 成功返回后创建和保存，不要在包级变量或 `init()` 中调用并缓存 `logit.Default()`、`logit.With(...)`、`logit.Named(...)`。初始化前默认日志保持静默，提前取得的 Logger 不会随后续初始化自动切换。当前业务代码在 Handler 或 Cron 任务执行时调用日志便捷函数，没有提前缓存模块 Logger；包级 `cronhandler.Registry` 只登记任务声明，不执行任务或取得 Logger。
 
 应用收到信号后统一停收并共享 30 秒排空，超时取消剩余任务；main 随后始终回收资源栈，按 NATS → Elasticsearch → Redis → MySQL → 阿里云 ES → OSS → 日志顺序执行。`lifecycle.Stack` 零值整体预算 20 秒；需要覆盖时用 `resources, err := lifecycle.New(15 * time.Second)`，向初始化传 resources。全部回调共享该期限，不逐资源重置。到期不再启动后续关闭，也不保证日志已刷盘，main 随即退出。收尾 defer 早于初始化，初始化 panic 仍先有界回收再传播。
 

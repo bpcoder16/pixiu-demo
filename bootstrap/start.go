@@ -1,7 +1,7 @@
 package bootstrap
 
 import (
-	"pixiu-demo/internal/cron"
+	"pixiu-demo/internal/cronhandler"
 	"pixiu-demo/internal/infra/nats"
 	"pixiu-demo/internal/natshandler"
 	"pixiu-demo/internal/route"
@@ -35,7 +35,7 @@ func Start() error {
 		},
 		// NewCronService
 		func() (apprun.Service, error) {
-			return bootstrap.NewCronService(cron.Registry.Handlers()...)
+			return bootstrap.NewCronService(cronhandler.Registry.Handlers()...)
 		},
 	)
 }

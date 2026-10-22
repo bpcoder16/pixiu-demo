@@ -1,4 +1,4 @@
-package cron
+package cronhandler
 
 import "github.com/bpcoder16/pixiu/infra/cronx"
 

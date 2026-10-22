@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"pixiu-demo/internal/cron"
+	"pixiu-demo/internal/cronhandler"
 
 	pixiubootstrap "github.com/bpcoder16/pixiu/biz/bootstrap"
 	"github.com/bpcoder16/pixiu/infra/env"
@@ -25,7 +25,7 @@ func TestDefaultCronTemplateDoesNotRequireRedis(t *testing.T) {
 			t.Fatal(err)
 		}
 		writeStartConfig(t, "cron.yaml", string(template))
-		service, err := pixiubootstrap.NewCronService(cron.Registry.Handlers()...)
+		service, err := pixiubootstrap.NewCronService(cronhandler.Registry.Handlers()...)
 		if err != nil {
 			t.Fatalf("默认 Cron 模板不应要求已注册 Redis: %v", err)
 		}
