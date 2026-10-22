@@ -12,10 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"pixiu-demo/internal/natspublisher"
+	"pixiu-demo/internal/natshandler"
 	natsservice "pixiu-demo/internal/service/nats"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
+	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/infra/natsx"
 	"github.com/bpcoder16/pixiu/logit"
@@ -48,21 +49,60 @@ func TestExamplesPublishAndConsumeAcrossInstances(t *testing.T) {
 		logit.SetDefault(previous)
 		_ = logit.Close(logger)
 	})
-	url := startExampleServer(t)
+	s := startExampleServer(t)
+	url := s.ClientURL()
 	first := newExampleClient(t, url, "first", true)
 	second := newExampleClient(t, url, "second", false)
+	var services []apprun.Service
+	ran := make(chan error, 2)
 	for _, name := range []string{"first", "second"} {
-		jetStreamHandlers, coreHandlers := newNATSRegistries()
 		writeExampleRegistration(t, name)
-		if err := bootstrap.RegisterNATSFromConfig(name, jetStreamHandlers, coreHandlers); err != nil {
+		service, err := bootstrap.NewNATSConsumerService(name, natshandler.JetStreamRegistry, natshandler.CoreRegistry)
+		if err != nil {
 			t.Fatal(err)
 		}
+		services = append(services, service)
+		t.Cleanup(func() {
+			if err := stopAndWait(service.Stop, service.Wait, service.Cancel); err != nil {
+				t.Error(err)
+			}
+		})
+		go func() { ran <- service.Run() }()
 	}
 
 	ctx, cancel := context.WithTimeout(logit.WithContextLogID(context.Background()), 10*time.Second)
 	defer cancel()
-	if err := natsservice.NewService(natspublisher.NewPublisher(first)).PublishExamples(ctx, "test-batch"); err != nil {
+	// Run 异步注册；服务端收到全部 Core 订阅后才发布，避免广播在启动期间丢失。
+	for subject, want := range map[string]int{"pixiu.demo.broadcast": 2, "pixiu.demo.queue": 8} {
+		for {
+			subs, err := s.Subsz(&server.SubszOptions{
+				Subscriptions: true,
+				Test:          subject,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if subs.Total == want {
+				break
+			}
+			select {
+			case err := <-ran:
+				t.Fatalf("消费者提前退出: %v", err)
+			case <-ctx.Done():
+				t.Fatalf("主题 %s 的订阅未就绪: %v", subject, ctx.Err())
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}
+	if err := natsservice.NewService().PublishExamples(ctx); err != nil {
 		t.Fatal(err)
+	}
+	stream, err := first.JetStream().Stream(ctx, "PIXIU_DEMO_TASKS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stream.CachedInfo().Config.MaxBytes; got != -1 {
+		t.Fatalf("Demo Stream 应沿用默认不限量配置，实际为 %d 字节", got)
 	}
 	consumer, err := first.JetStream().Consumer(ctx, "PIXIU_DEMO_TASKS", "demo-worker")
 	if err != nil {
@@ -86,9 +126,20 @@ func TestExamplesPublishAndConsumeAcrossInstances(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	for _, client := range []*natsx.Client{first, second} {
-		client.StopConsumers()
-		_ = client.WaitConsumers(context.Background())
+	for _, service := range services {
+		if err := stopAndWait(service.Stop, service.Wait, service.Cancel); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range services {
+		select {
+		case err := <-ran:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-ctx.Done():
+			t.Fatal("消费者未退出", ctx.Err())
+		}
 	}
 	for _, client := range []*natsx.Client{first, second} {
 		if err := client.Close(); err != nil {
@@ -145,8 +196,7 @@ func TestRegisterRejectsStreamConflict(t *testing.T) {
 	if !initExampleProcess(t) {
 		return
 	}
-	client := newExampleClient(t, startExampleServer(t), "conflict", true)
-	jetStreamHandlers, coreHandlers := newNATSRegistries()
+	client := newExampleClient(t, startExampleServer(t).ClientURL(), "conflict", true)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := client.JetStream().CreateStream(ctx, jetstream.StreamConfig{
@@ -157,7 +207,16 @@ func TestRegisterRejectsStreamConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeExampleRegistration(t, "conflict")
-	if err := bootstrap.RegisterNATSFromConfig("conflict", jetStreamHandlers, coreHandlers); !errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
+	service, err := bootstrap.NewNATSConsumerService("conflict", natshandler.JetStreamRegistry, natshandler.CoreRegistry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := stopAndWait(service.Stop, service.Wait, service.Cancel); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := service.Run(); !errors.Is(err, jetstream.ErrStreamNameAlreadyInUse) {
 		t.Fatalf("冲突资源应阻止继续注册，且保留 SDK 错误链: %v", err)
 	}
 	if _, err := client.JetStream().Consumer(ctx, "PIXIU_DEMO_TASKS", "demo-worker"); !errors.Is(err, jetstream.ErrConsumerNotFound) {
@@ -165,15 +224,16 @@ func TestRegisterRejectsStreamConflict(t *testing.T) {
 	}
 }
 
-func startExampleServer(t *testing.T) string {
+func startExampleServer(t *testing.T) *server.Server {
 	t.Helper()
 	s, err := server.NewServer(&server.Options{
-		Host:      "127.0.0.1",
-		Port:      -1,
-		JetStream: true,
-		StoreDir:  t.TempDir(),
-		NoLog:     true,
-		NoSigs:    true,
+		Host:              "127.0.0.1",
+		Port:              -1,
+		JetStream:         true,
+		JetStreamMaxStore: 2 << 30,
+		StoreDir:          t.TempDir(),
+		NoLog:             true,
+		NoSigs:            true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +246,7 @@ func startExampleServer(t *testing.T) string {
 	if !s.ReadyForConnections(10 * time.Second) {
 		t.Fatal("测试 NATS 未就绪")
 	}
-	return s.ClientURL()
+	return s
 }
 
 func newExampleClient(t *testing.T, url, name string, isDefault bool) *natsx.Client {

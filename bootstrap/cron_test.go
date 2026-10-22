@@ -40,7 +40,7 @@ func TestCronConfigurationStopsStartup(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			isolatedHTTP(t, func() {
 				addr := initMixedStartConfig(t)
-				client := newExampleClient(t, startExampleServer(t), "demo", true)
+				client := newExampleClient(t, startExampleServer(t).ClientURL(), "demo", true)
 				writeExampleRegistration(t, "demo")
 				if name == "unknown-handler" {
 					writeStartConfig(t, "cron.yaml", "jobs:\n  - name: unknown\n    every: 1s\n")

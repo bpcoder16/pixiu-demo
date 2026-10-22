@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"pixiu-demo/internal/cron"
 	"pixiu-demo/internal/infra/nats"
+	"pixiu-demo/internal/natshandler"
 	"pixiu-demo/internal/route"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
@@ -18,8 +19,11 @@ func Start() error {
 	return bootstrap.Start(
 		// NewNATSConsumerService
 		func() (apprun.Service, error) {
-			jetStreamHandlers, coreHandlers := newNATSRegistries()
-			return bootstrap.NewNATSConsumerService(nats.DemoName, jetStreamHandlers, coreHandlers)
+			return bootstrap.NewNATSConsumerService(
+				nats.DemoName,
+				natshandler.JetStreamRegistry,
+				natshandler.CoreRegistry,
+			)
 		},
 		// GinHTTPService
 		func() (apprun.Service, error) {

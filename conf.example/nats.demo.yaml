@@ -3,7 +3,8 @@
 # 可选环境前缀，省略、null 或空字符串时不启用；仅允许英文字母、数字、_、-。
 # 初始化后固定；发布、Request 和注册均填写原始主题或名称，由客户端统一添加前缀。
 # 例如 test1 将 pixiu.demo.tasks 映射为 test1.pixiu.demo.tasks，将 PIXIU_DEMO_TASKS 映射为 test1_PIXIU_DEMO_TASKS。
-namespace: ""
+# Demo 使用独立命名空间，避开同一账户内已有的同名 Stream 和订阅。
+namespace: "pixiu_demo"
 
 # 列表中的地址属于同一个逻辑实例，不为每个地址创建独立客户端。
 urls:
@@ -21,7 +22,7 @@ drainTimeout: "10s"
 closeTimeout: "20s"
 
 # 服务端须开启 JetStream（本地可用 nats-server -js）；客户端配置不会开启它。
-# Stream/Consumer 由迁移完成后的 RegisterNATSFromConfig 读取 nats-register.demo.yaml 准备。
+# 迁移完成后由 NewNATSConsumerService 读取 nats-register.demo.yaml，服务 Run 时准备 Stream/Consumer。
 # 配置冲突会阻止应用启动，不自动更新远端资源。
 jetStream:
   # 仅限制默认上下文的异步 PubAck 等待，不影响同步发布或 Consumer AckWait。

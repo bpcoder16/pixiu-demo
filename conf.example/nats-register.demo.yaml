@@ -1,4 +1,4 @@
-# 与 nats.demo.yaml 放在同一目录；迁移及 Handler 依赖就绪后由 RegisterNATSFromConfig 读取。
+# 与 nats.demo.yaml 放在同一目录；迁移及 Handler 依赖就绪后由 NewNATSConsumerService 读取，服务 Run 时启动消费。
 # 不随 MustBaseInit 自动启动消费；namespace 在 nats.demo.yaml 中配置，本文件不接受该字段。
 # 此处填写原始名称和主题；Client 为注册、发布和 Request 统一添加前缀。
 # 例如 namespace 为 test1 时，名称及非空 queue 添加 test1_，主题添加 test1.。
@@ -13,9 +13,11 @@ streams:
   - name: "PIXIU_DEMO_TASKS"
     subjects:
       - "pixiu.demo.tasks"
-    # 以下四项均可省略或设为 null，按需取消注释覆盖。
-    # replicas 沿用 streamDefaults.replicas；其余三项沿用 natsx Default，注释中列出当前默认值。
+    # 以下五项均可省略或设为 null，按需取消注释覆盖。
+    # replicas 沿用 streamDefaults.replicas；其余四项沿用 natsx Default，注释中列出当前默认值。
     # replicas: 1          # 不得超过全局值；0 或负数也沿用全局值，解码及数字转换沿用 configx。
+    # maxBytes: 104857600  # 可选整数字节数，此例为 100 MiB；默认 -1，不设 Stream 容量上限。
+    # 省略或 null 沿用默认值；0 或 -1 不限量，仍受账户及服务端配额限制。不接受带单位字符串。
     # retention: "limits"  # 可选 limits、interest、workqueue。
     # maxAge: "2160h"      # 消息最大年龄；0 表示不限制年龄。支持 Go 时长单位，不支持 d。
     # duplicates: "2m"     # 消息 ID 去重窗口；0 由服务端确定，不代表关闭去重。

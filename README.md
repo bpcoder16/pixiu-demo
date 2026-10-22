@@ -63,9 +63,9 @@ go run .
 
 ## NATS 消息示例
 
-[`nats-register.demo.yaml`](conf.example/nats-register.demo.yaml) 集中声明 Stream 和消费者；[`registry.go`](internal/natshandler/registry.go) 与消费 Handler 同包，集中维护处理方法及稳定名称；`NewRegistries(handler)` 每次创建独立的 JetStream/Core 注册表，不获取客户端或启动消费。消费入口在 [`natshandler`](internal/natshandler/handler.go)，业务流程在 [`nats.Service`](internal/service/nats/service.go)，实际发送在 [`natspublisher`](internal/natspublisher/publish.go)。[`bootstrap/nats.go`](bootstrap/nats.go) 在依赖就绪后构造 Service、Handler，并调用注册表工厂完成绑定；配置读取与启动消费由 bootstrap 装配。消费和发布复用已初始化的 demo 客户端。服务端须开启 JetStream，例如本地执行 `nats-server -js`，再按前文配置其余基础设施并运行应用；客户端的 `jetStream` 配置不会开启服务端功能。
+[`nats-register.demo.yaml`](conf.example/nats-register.demo.yaml) 集中声明 Stream 和消费者；[`registry.go`](internal/natshandler/registry.go) 与消费 Handler 同包，通过包级 `JetStreamRegistry` 和 `CoreRegistry` 集中声明处理函数，自动使用原始函数名，不获取客户端或启动消费。消费入口在 [`natshandler`](internal/natshandler/handler.go)，业务流程在 [`nats.Service`](internal/service/nats/service.go)，实际发送在 [`natspublisher`](internal/natspublisher/publish.go)。[`bootstrap/start.go`](bootstrap/start.go) 使用注册表装配消费服务；Handler 在处理消息时通过 `NewService()` 获取 Service，复用已初始化的 demo 客户端。服务端须开启 JetStream，例如本地执行 `nats-server -js`，再按前文配置其余基础设施并运行应用；客户端的 `jetStream` 配置不会开启服务端功能。
 
-可选环境前缀 `namespace` 只在 `nats.demo.yaml` 配置，省略、`null` 或空字符串时不启用，模板默认为空；非空值只允许英文字母、数字、`_`、`-`，初始化后固定。注册配置及发布、Request 均填写原始名称和主题，由 Client 统一添加前缀。例如 `test1` 将 `pixiu.demo.tasks` 映射为 `test1.pixiu.demo.tasks`，Stream、Durable、Core 消费声明名称及非空 queue 添加 `test1_`。Handler 引用名称不变，回调主题保留前缀；修改前缀不迁移或删除旧 Stream/Durable。下表列出未添加前缀的原始名称。
+可选环境前缀 `namespace` 只在 `nats.demo.yaml` 配置，省略、`null` 或空字符串时不启用，Demo 模板使用 `pixiu_demo`；非空值只允许英文字母、数字、`_`、`-`，初始化后固定。注册配置及发布、Request 均填写原始名称和主题，由 Client 统一添加前缀。Demo 实际 Stream 为 `pixiu_demo_PIXIU_DEMO_TASKS`，持久化主题为 `pixiu_demo.pixiu.demo.tasks`，Durable 为 `pixiu_demo_demo-worker`；Core 消费声明名称及非空 queue 同样添加 `pixiu_demo_`。Handler 引用名称不变，回调主题保留前缀；修改前缀不迁移或删除旧 Stream/Durable。下表列出未添加前缀的原始名称。
 
 | 通道 | 启动声明 | 消费方式 |
 | --- | --- | --- |
@@ -73,44 +73,42 @@ go run .
 | `pixiu.demo.broadcast` | Core 订阅，Queue 留空 | 每个在线应用实例都收到一份 |
 | `pixiu.demo.queue` | Core 订阅，Queue 为 `pixiu-demo-workers`，每个 Client 创建 4 个同组订阅 | 同组每条消息只交给一个订阅，Handler 可并发执行 |
 
-启动注册：MustInit 初始化共享客户端并执行 MySQL 迁移；Start 的工厂装配消费链路，调用 `bootstrap.NewNATSConsumerService(nats.DemoName, jetStreamHandlers, coreHandlers)`，内部由 NewNATSConsumer 读取配置、绑定 Handler，返回服务和构造错误。Run 使用可由 Stop 取消的注册 context，依次注册 Stream、JetStream 和 Core；Stop 不等待远端注册完成。各注册入口每 Client 只调用一次，注册失败由管理器清理已启动部分，远端资源保留。Start 并发 Run，登记顺序不保证就绪；Handler 依赖须提前准备。
+启动注册：MustInit 初始化共享客户端并执行 MySQL 迁移；Start 的工厂装配消费链路，调用 `bootstrap.NewNATSConsumerService(nats.DemoName, natshandler.JetStreamRegistry, natshandler.CoreRegistry)`，读取配置、绑定 Handler，返回服务和构造错误。Run 使用可由 Stop 取消的注册 context，依次注册 Stream、JetStream 和 Core；Stop 不等待远端注册完成。各注册入口每 Client 只调用一次，注册失败由管理器清理已启动部分，远端资源保留。Start 并发 Run，登记顺序不保证就绪；Handler 依赖须提前准备。
 
 注册文件是必需文件，缺失或未知字段会阻止启动。`streamDefaults.replicas` 始终必填且为正整数，同时作为逐项副本数的上限，即使没有 Stream 或全部 Stream 都有覆盖值；单个 Stream 的 `replicas` 省略、`null` 或解码后不大于 0 时继承全局值，正值不得超过全局值，解码及数字转换沿用 Pixiu 的 `configx`。示例全局值为 1，适用于单节点；多副本须具备相应服务端条件。
 
-注册模板中的可选调参项以注释展示，按需取消注释；省略或设为 `null` 时沿用 natsx Default：
+注册模板中的可选调参项均以注释展示，按需取消注释；省略或设为 `null` 时沿用 natsx Default：
 
 | 位置 | 可选字段与默认值 |
 | --- | --- |
-| `streams[]` | `retention: "limits"`、`maxAge: "2160h"`、`duplicates: "2m"` |
+| `streams[]` | `maxBytes: -1`（不设 Stream 容量上限）、`retention: "limits"`、`maxAge: "2160h"`、`duplicates: "2m"` |
 | `jetStreamConsumers[]` | `ackWait: "60s"`、`maxDeliver: 5`、`maxAckPending: 1000`、`retryDelay: "0s"` |
 | `jetStreamConsumers[].consume` | `workers: 1`、`maxMessages: 0` |
 
-`retention` 可选 `limits`、`interest`、`workqueue`。`maxAge=0` 表示不限制年龄，`duplicates=0` 由服务端确定，不代表关闭去重；时长范围由服务端校验，`maxAge` 大于 0 时去重窗口不得超过它。时长使用 Go 单位，不支持 `d`。`ackWait` 必须大于 0；`maxDeliver`、`maxAckPending` 的范围由服务端校验。`workers=0` 按 1 处理，`maxMessages=0` 为有效 workers 的两倍，不含处理中的消息；workers、maxMessages、retryDelay 不得为负。其余参数沿用 Default，不支持 `enabled`、热更新或完整 SDK 配置。
+`maxBytes` 使用整数字节数，不接受带单位字符串；省略或设为 `null` 时默认 `-1`，不设 Stream 容量上限，仍受账户及服务端配额限制，显式 `0` 同样不限量。需要限制单个 Stream 时，可取消注释 `maxBytes: 104857600`，设置为 100 MiB。NATS 会按声明容量校验配额，显式容量超过配额时，即使没有消息也可能返回 `10047`。`retention` 可选 `limits`、`interest`、`workqueue`。`maxAge=0` 表示不限制年龄，`duplicates=0` 由服务端确定，不代表关闭去重；时长范围由服务端校验，`maxAge` 大于 0 时，去重窗口不得超过它。时长使用 Go 单位，不支持 `d`。`ackWait` 必须大于 0；`maxDeliver`、`maxAckPending` 的范围由服务端校验。`workers=0` 按 1 处理，`maxMessages=0` 为有效 workers 的两倍，不含处理中的消息；workers、maxMessages、retryDelay 不得为负。其余参数沿用 Default，不支持 `enabled`、热更新或完整 SDK 配置。
 
 Core 的 `queue` 非空时，`subscribers` 必填且必须大于 1，控制当前 Client 创建的同组订阅数，示例设为 4，Handler 须支持并发；`queue` 为空时广播，忽略此数量且始终只有一个订阅。
 
 Handler 引用必须与登记名称完全一致，区分大小写；包级函数自动使用原始函数名，方法值和闭包用 `MustRegister(handler, name)` 显式命名。Durable 与 Handler 名称独立，函数重命名不应改变 Durable。只启动文件列出的消费者；新增使用已有 Handler 的消费者只需增加 YAML 项，新增处理逻辑再补登记。删除配置项后重启仅停用本进程对应消费，远端 Stream/Durable 和进度保留，不影响其他进程。三份列表可为空，但全局副本数仍必填。
 
-从旧代码声明迁移时，Consumer 的 AckWait 从 30s 改为 60s、MaxDeliver 从 3 改为 5、本地 Workers 从 2 改为 1、RetryDelay 从 1s 改为 0。过滤主题使用 Default 的 FilterSubjects，服务端须支持 NATS Server 2.10 或以上。已有远端配置不一致时须在部署前显式对齐；启动不会自动更新或删除已有资源。后续升级 Pixiu 若 Default 改变，同样要检查已有资源兼容性。LimitsPolicy 下 ACK 不删除消息，默认仍受 5 GiB 容量、90 天保留期限和满额拒绝新消息的限制。
+从旧代码声明迁移时，Consumer 的 AckWait 从 30s 改为 60s、MaxDeliver 从 3 改为 5、本地 Workers 从 2 改为 1、RetryDelay 从 1s 改为 0。过滤主题使用 Default 的 FilterSubjects，服务端须支持 NATS Server 2.10 或以上。已有远端配置不一致时须在部署前显式对齐；启动不会自动更新或删除已有资源。Demo 使用独立 `pixiu_demo` 命名空间，原来的 `PIXIU_DEMO_TASKS` 及其消费进度仍保留。后续升级 Pixiu 若 Default 改变，同样要检查已有资源兼容性。LimitsPolicy 下 ACK 不删除消息，Demo 默认不设 Stream 容量上限，仍受账户及服务端配额、90 天保留期限限制；显式设置容量后满额拒绝新消息。
 
-ACK 与失败重投：`natshandler.Handler.HandleTask` 接收 `context.Context` 和 `jetstream.Msg`，将原始文本转换为 `message.DemoMessage` 后调用 Service，并返回业务 error；Service 示例只记录 `DemoNATSJetStream`。
+ACK 与失败重投：`natshandler.HandleTask` 接收 `context.Context` 和 `jetstream.Msg`，按调用创建 Service，将原始消息直接传给 Service，并返回业务 error；确认仍由组件处理。Service 示例通过 `msg.Data()` 读取正文，只记录 `DemoNATSJetStream`。
 
 - 返回 nil 由组件 ACK；返回 error 或 panic 时，默认 `retryDelay=0` 保持未确认，等待服务端按 `AckWait=60s` 重投；配置正值 retryDelay 时发送延迟 NAK。默认 `MaxDeliver=5` 包含首次在内最多投递 5 次。
 - 失败耗尽时记录日志，不 ACK/Term/主动 NAK，不自动删除或转入死信队列。handler 不自行 ACK/NAK/Term，须完成本条业务后再返回，支持并发且保证业务幂等。
 - `ackWait` 应覆盖预取等待和处理时间，demo 默认为 60s；组件不自动 `InProgress`。可在 YAML 调整 `ackWait`、`maxDeliver`、`retryDelay`，不开放 `BackOff`。
 - Core handler 接收 `context.Context` 和 `*nats.Msg`、返回 error，分别记录 `DemoNATSCoreBroadcast`、`DemoNATSCoreQueue`；error 或 panic 只记日志、不重投。需要请求响应时显式调用 `msg.Respond`。
 
-同步与异步发布：启动后调用 `POST /api/app/nats/publish`，由 `httphandler.AppNATSPublish` 使用请求 context 调用 `nats.Service.PublishExamples`，向 Core 广播、Queue 和 JetStream 同步、异步各发送一条固定示例消息：
+同步与异步发布：启动后调用 `POST /api/app/nats/publish`，无需请求参数或请求体，由 `httphandler.AppNATSPublish` 使用请求 context 调用 `nats.Service.PublishExamples`，向 Core 广播、Queue 和 JetStream 同步、异步各发送一条固定示例消息：
 
 ```bash
-curl -sS 'http://127.0.0.1:8888/api/app/nats/publish' \
-  -H 'Content-Type: application/json' \
-  -d '{"messageIDPrefix":"demo-batch-1"}'
+curl -sS -X POST 'http://127.0.0.1:8888/api/app/nats/publish'
 ```
 
-成功返回 `{"code":0,"msg":"成功"}`；缺少或空白前缀返回业务码 `10001`，发布失败返回 `400`，均使用 HTTP 200。Core 的 `Publish` 成功只表示客户端受理；`PublishJetStream` 等待 PubAck，`PublishJetStreamAsync` 先检查提交 error，再通过 `future.Ok()` / `future.Err()` 获取最终结果。接口成功不代表 handler 已完成；示例确认日志为 `DemoNATSPublish`。失败可能已有部分消息发出或消费，不回滚、不自动重试。
+成功返回 `{"code":0,"msg":"成功"}`，发布失败返回业务码 `400`，均使用 HTTP 200。Core 的 `Publish` 成功只表示客户端受理；`PublishJetStream` 等待 PubAck，`PublishJetStreamAsync` 先检查提交 error，再通过 `future.Ok()` / `future.Err()` 获取最终结果。接口成功不代表 handler 已完成；示例确认日志为 `DemoNATSPublish`。失败可能已有部分消息发出或消费，不回滚、不自动重试。
 
-两种 JetStream 发布都要求非空 messageID，使用请求的 `messageIDPrefix` 分别加 `:sync`、`:async`；同一批重试复用前缀，新批次更换。去重只在同一 Stream 的服务端窗口内生效，不能替代业务幂等；重试接口会再次发送 Core 消息。异步 ctx 只用于提交前检查、日志和追踪，取消等待不撤销已提交消息；`PublishAsyncTimeout` 在 [`nats.demo.yaml`](conf.example/nats.demo.yaml) 中配置，默认 5 秒，与消费者 AckWait 无关。超时不保证消息未写入，重试仍复用原 ID。异步方法复制 data/Header，返回后可复用输入，不要修改 `future.Msg()`。
+两种 JetStream 发布都要求非空 messageID，Service 使用 Go 1.27 标准库 `uuid.New().String()` 为每次调用生成批次前缀，再分别加 `:sync`、`:async`。重复调用（包括失败后重试）会生成新批次并重新发送四种消息，接口不提供跨调用去重。去重只在同一 Stream 的服务端窗口内生效，不能替代业务幂等。异步 ctx 只用于提交前检查、日志和追踪，取消等待不撤销已提交消息；`PublishAsyncTimeout` 在 [`nats.demo.yaml`](conf.example/nats.demo.yaml) 中配置，默认 5 秒，与消费者 AckWait 无关。超时不保证消息未写入，再次调用会使用新 ID，可能产生重复业务消息。异步方法复制 data/Header，返回后可复用输入，不要修改 `future.Msg()`。
 
 在 `log/pixiu-demo/biz/info.log` 查看上述 `DemoNATS*` 记录。启动多个连接同一 NATS 的应用实例（HTTP 需使用不同端口），调用测试接口可观察广播与 Queue 的差异。
 
@@ -165,7 +163,7 @@ cp -n conf.example/cron.yaml conf/
 | 方法 | 路径 | 行为 |
 | --- | --- | --- |
 | GET | `/api/app/ping` | 可选参数 `name`，默认 `world`，最多 32 个字符 |
-| POST | `/api/app/nats/publish` | JSON 必填 `messageIDPrefix`，发布一组 Core 和 JetStream 示例消息并等待 PubAck |
+| POST | `/api/app/nats/publish` | 无需请求参数，Service 生成 UUID 批次前缀，发布一组 Core 和 JetStream 示例消息并等待 PubAck |
 | POST | `/api/app/aliyun/oss/upload` | multipart 必填 `file`、`key`，上传单个文件 |
 | POST | `/api/app/elasticsearch/synonyms-validate` | JSON 必填 `synonymsPath`，创建并清理临时索引以验证节点词库 |
 | POST | `/api/app/elasticsearch/synonyms-reload` | JSON 必填 `index`，重载单个实际索引的搜索分析器并清理 request cache |
@@ -304,7 +302,7 @@ internal/service/aliyunoss/ 阿里云 OSS 上传业务
 internal/service/aliyunes/ 阿里云 ES 词典管理及实例查询业务
 internal/service/elasticsearch/ ES 数据面同义词词库验证与搜索分析器重载
 internal/service/nats/  NATS 示例发布编排及消费业务
-internal/model/            HTTP 请求/响应及 message 消息数据结构
+internal/model/            HTTP 请求/响应数据结构
 internal/repository/       数据库查询及 GORM 默认主从会话入口
 internal/database/         项目拥有的 Model 迁移清单
 internal/infra/            共享基础设施客户端入口
@@ -315,11 +313,11 @@ test/                      控制脚本隔离测试
 
 Handler 只负责参数解析、校验和根据 Service 返回数据构造响应；具体业务放入 `internal/service/`，按业务领域分包，通过构造函数创建服务并接收标准 `context.Context`。OSS 上传由 `internal/service/aliyunoss` 负责打开和关闭文件、设置 Content-Type 并调用默认 OSS 客户端；multipart 临时文件仍由 Handler 随请求结束清理。阿里云 ES 词典管理及实例查询由 `internal/service/aliyunes` 调用默认管理客户端，Handler 将结果转换为接口响应。
 
-HTTP 和 NATS 是并列的业务入口：`httphandler → Service`、`natshandler → Service`。NATS 发布遵循 `Service → natspublisher → infra/nats`，数据库访问继续走 `Service → Repository`；`natspublisher` 与数据库 Repository 同属外部访问层。消息结构独立放在 `internal/model/message/`，各层按需引用；Service 不接收 Gin 或 NATS SDK 消息。示例沿用原始文本正文，不改为 JSON。
+HTTP 和 NATS 是并列的业务入口：`httphandler → Service`、`natshandler → Service`。NATS 发布遵循 `Service → natspublisher → infra/nats`，数据库访问继续走 `Service → Repository`；`natspublisher` 与数据库 Repository 同属外部访问层。NATS 消费 Service 的 JetStream 入口接收 `jetstream.Msg`，Core 入口接收 `*nats.Msg`，发布时向 Publisher 传递 `[]byte` 正文。示例沿用原始文本正文，不改为 JSON。
 
-`nats.Service.PublishExamples` 决定发布顺序、消息内容和 messageID；`natspublisher.Publisher` 负责主题映射、正文编码、发送及同步/异步确认，不决定业务流程。`natshandler.Handler` 将 SDK 消息转换为业务数据并调用同一个领域的 Service，等待业务完成后返回，不自行 ACK/NAK/Term。
+`nats.Service.PublishExamples` 决定发布顺序、消息内容和 messageID；`natspublisher.Publisher` 负责主题映射、发送及同步/异步确认，不决定业务流程。`natshandler` 中的包级函数将 Core 和 JetStream 原始消息直接传给 Service，等待业务完成后返回，Handler 和 Service 均不自行 ACK/NAK/Term。
 
-`bootstrap.newNATSRegistries` 在共享客户端和数据库迁移就绪后构造 Service 和 Handler，再调用 `natshandler.NewRegistries(handler)` 创建独立注册表。处理方法清单集中在 `natshandler/registry.go`，方法值使用现有的 `HandleTask`、`HandleBroadcast`、`HandleQueue` 名称，配置引用不变。新增处理方法时同步维护该清单和 YAML，bootstrap 无需逐项绑定。`infra/nats` 仅保留客户端入口和实例名，不反向导入 Handler 或 Service，避免循环依赖；Publisher 继续通过该入口取得默认客户端。当前示例消费链路持有启动时创建的 Service 和 Publisher，Publisher 保存客户端引用；也可在回调中按调用创建 Service。NATS 消费排空期间仍可查询默认客户端并继续发布，CloseAll 开始后查询仍 panic。HTTP/Cron 在共享资源关闭前已经退出。多实例场景可用 `NewService(natspublisher.NewPublisher(client))` 显式指定依赖；所有消费服务排空期间共享连接仍可用，但不保证消息交给已停止的消费者。客户端回收阶段不再执行业务或跨实例调用。
+`bootstrap.Start` 在共享客户端和数据库迁移就绪后使用 `natshandler.JetStreamRegistry` 和 `natshandler.CoreRegistry` 装配消费服务。处理函数清单集中在 `natshandler/registry.go`，与 Cron 一样采用包级注册表，自动使用 `HandleTask`、`HandleBroadcast`、`HandleQueue` 函数名，配置引用不变。新增或重命名处理函数时同步维护该清单和 YAML，bootstrap 无需逐项绑定。`infra/nats` 仅保留客户端入口和实例名，不反向导入 Handler 或 Service，避免循环依赖；Publisher 继续通过该入口取得默认客户端。HTTP 与三个 NATS 消费入口均按调用使用无参 `NewService()`，由 Service 内部获取默认 Publisher，无需在启动时构造并持有 Service。NATS 消费排空期间仍可查询默认客户端并继续发布，CloseAll 开始后查询仍 panic。HTTP/Cron 在共享资源关闭前已经退出。所有消费服务排空期间共享连接仍可用，但不保证消息交给已停止的消费者。客户端回收阶段不再执行业务或跨实例调用。
 
 Service 按职责、依赖、状态和生命周期划分。同一领域内职责相关、依赖相同且没有独立状态或生命周期差异的操作，默认归入同一个 Service 结构体，方法可按功能分布在多个 `.go` 文件中；文件数量和接口数量不决定结构体数量。只有出现独立业务流程、明显不同的依赖或状态、不同的初始化或关闭职责时，再拆分多个 Service；共用一个客户端本身不足以决定合并。
 
@@ -362,7 +360,7 @@ Pixiu 的每个入口均包含常规测试和带 `natsintegration` 标签的 NAT
 
 Go 测试覆盖公开 Ping、OSS 上传、ES 同义词词库验证及清理失败、阿里云 ES 同义词词典查询与更新、实例详情查询、参数边界、请求取消、HTTP 404/405、请求日志作用域、文档核心契约和 HTTP 装配冒烟；另验证默认模板构造 Cron 不要求已注册 Redis，而 Cron 配置错误或显式启用锁时引用的 Redis 未初始化会阻止启动，以及 Unix 子进程中通过真实 Start 同时提供 HTTP 和执行心跳、SIGTERM 按序关闭后不再调度。混合启动测试不启用分布式锁以隔离 Redis；OSS、ES 数据面和阿里云 ES 测试使用本地 HTTP 模拟服务，无需启动外部基础设施。控制脚本测试使用模拟进程、端口和 supervise。测试和构建成功不代替真实基础设施连接验证。
 
-NATS 装配测试位于 `bootstrap/nats_test.go`，调用实际的消费链路装配和注册表工厂，为两个客户端分别创建独立注册表，复用 Pixiu 相同版本的 `nats-server/v2`，在隔离测试进程内启动临时 JetStream 服务，读取共享注册模板并绑定实际 Handler，覆盖无整体期限的配置注册、Default 参数、两实例共享 Durable、Core 广播与 Queue、同步／异步 PubAck、消费 ACK、资源冲突及客户端收尾；接口测试覆盖参数校验、发布确认、同批次去重与统一错误响应。不读取本地 `conf/`，无需预先安装或启动 NATS 服务。
+NATS 装配测试位于 `bootstrap/nats_test.go`，调用实际的消费链路装配，两个客户端共用包级注册表，各消费服务读取独立快照，复用 Pixiu 相同版本的 `nats-server/v2`，在隔离测试进程内启动临时 JetStream 服务，读取共享注册模板并绑定实际 Handler，覆盖无整体期限的配置注册、Default 参数、两实例共享 Durable、Core 广播与 Queue、同步／异步 PubAck、消费 ACK、资源冲突及客户端收尾；接口测试覆盖无参发布、发布确认、UUID 批次前缀及跨调用更新与统一错误响应。不读取本地 `conf/`，无需预先安装或启动 NATS 服务。
 
 ```bash
 make                           # 构建并打包

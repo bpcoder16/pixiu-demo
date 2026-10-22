@@ -1,4 +1,4 @@
-# 与 app.yaml 放在同一配置目录，由 bootstrap.NewCronScheduler 严格读取。
+# 与 app.yaml 放在同一配置目录，由 bootstrap.NewCronService 严格读取。
 # 命名 Logger 未注册时回退到默认 Logger；app.yaml 的 log.names 已声明 cron。
 loggerName: "cron"
 

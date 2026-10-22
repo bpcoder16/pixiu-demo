@@ -26,7 +26,7 @@ func TestNATSHTTPAndCronStartup(t *testing.T) {
 	// 信号仅发送给 isolatedHTTP 创建的测试子进程，避免影响测试主进程。
 	isolatedHTTP(t, func() {
 		addr := initMixedStartConfig(t)
-		natsClient := newExampleClient(t, startExampleServer(t), "demo", true)
+		natsClient := newExampleClient(t, startExampleServer(t).ClientURL(), "demo", true)
 		writeExampleRegistration(t, "demo")
 		// 混合启动不启用分布式锁以隔离外部 Redis；显式启用锁时的 Redis 前置约束另有覆盖。
 		writeStartConfig(t, "cron.yaml", "jobs:\n  - name: Heartbeat\n    every: 100ms\n    timeout: 2s\n")
