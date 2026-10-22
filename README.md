@@ -63,7 +63,7 @@ go run .
 
 ## NATS 消息示例
 
-[`nats-register.demo.yaml`](conf.example/nats-register.demo.yaml) 集中声明 Stream 和消费者；[`registry.go`](internal/natshandler/registry.go) 与消费 Handler 同包，通过包级 `JetStreamRegistry` 和 `CoreRegistry` 集中声明处理函数，自动使用原始函数名，不获取客户端或启动消费。消费入口在 [`natshandler`](internal/natshandler/handler.go)，业务流程在 [`nats.Service`](internal/service/nats/service.go)，实际发送在 [`natspublisher`](internal/natspublisher/publish.go)。[`bootstrap/start.go`](bootstrap/start.go) 使用注册表装配消费服务；Handler 在处理消息时通过 `NewService()` 获取 Service，复用已初始化的 demo 客户端。服务端须开启 JetStream，例如本地执行 `nats-server -js`，再按前文配置其余基础设施并运行应用；客户端的 `jetStream` 配置不会开启服务端功能。
+[`nats-register.demo.yaml`](conf.example/nats-register.demo.yaml) 集中声明 Stream 和消费者；JetStream 消费者嵌套在 `streams[].consumers`，自动继承所属 Stream 的 name，同一 Stream 可配置多个消费者；[`registry.go`](internal/natshandler/registry.go) 与消费 Handler 同包，通过包级 `JetStreamRegistry` 和 `CoreRegistry` 集中声明处理函数，自动使用原始函数名，不获取客户端或启动消费。消费入口在 [`natshandler`](internal/natshandler/handler.go)，业务流程在 [`nats.Service`](internal/service/nats/service.go)，实际发送在 [`natspublisher`](internal/natspublisher/publish.go)。[`bootstrap/start.go`](bootstrap/start.go) 使用注册表装配消费服务；Handler 在处理消息时通过 `NewService()` 获取 Service，复用已初始化的 demo 客户端。服务端须开启 JetStream，例如本地执行 `nats-server -js`，再按前文配置其余基础设施并运行应用；客户端的 `jetStream` 配置不会开启服务端功能。
 
 可选环境前缀 `namespace` 只在 `nats.demo.yaml` 配置，省略、`null` 或空字符串时不启用，Demo 模板使用 `pixiu_demo`；非空值只允许英文字母、数字、`_`、`-`，初始化后固定。注册配置及发布、Request 均填写原始名称和主题，由 Client 统一添加前缀。Demo 实际 Stream 为 `pixiu_demo_PIXIU_DEMO_TASKS`，持久化主题为 `pixiu_demo.pixiu.demo.tasks`，Durable 为 `pixiu_demo_demo-worker`；Core 消费声明名称及非空 queue 同样添加 `pixiu_demo_`。Handler 引用名称不变，回调主题保留前缀；修改前缀不迁移或删除旧 Stream/Durable。下表列出未添加前缀的原始名称。
 
@@ -77,19 +77,19 @@ go run .
 
 注册文件是必需文件，缺失或未知字段会阻止启动。`streamDefaults.replicas` 始终必填且为正整数，同时作为逐项副本数的上限，即使没有 Stream 或全部 Stream 都有覆盖值；单个 Stream 的 `replicas` 省略、`null` 或解码后不大于 0 时继承全局值，正值不得超过全局值，解码及数字转换沿用 Pixiu 的 `configx`。示例全局值为 1，适用于单节点；多副本须具备相应服务端条件。
 
-注册模板中的可选调参项均以注释展示，按需取消注释；省略或设为 `null` 时沿用 natsx Default：
+注册模板中的可选调参项均以注释展示，按需取消注释；消费者参数随声明一起嵌套在 `streams[].consumers[]` 下，`consume` 子字段再缩进一级；省略或设为 `null` 时沿用 natsx Default：
 
 | 位置 | 可选字段与默认值 |
 | --- | --- |
 | `streams[]` | `maxBytes: -1`（不设 Stream 容量上限）、`retention: "limits"`、`maxAge: "2160h"`、`duplicates: "2m"` |
-| `jetStreamConsumers[]` | `ackWait: "60s"`、`maxDeliver: 5`、`maxAckPending: 1000`、`retryDelay: "0s"` |
-| `jetStreamConsumers[].consume` | `workers: 1`、`maxMessages: 0` |
+| `streams[].consumers[]` | `ackWait: "60s"`、`maxDeliver: 5`、`maxAckPending: 1000`、`retryDelay: "0s"` |
+| `streams[].consumers[].consume` | `workers: 1`、`maxMessages: 0` |
 
 `maxBytes` 使用整数字节数，不接受带单位字符串；省略或设为 `null` 时默认 `-1`，不设 Stream 容量上限，仍受账户及服务端配额限制，显式 `0` 同样不限量。需要限制单个 Stream 时，可取消注释 `maxBytes: 104857600`，设置为 100 MiB。NATS 会按声明容量校验配额，显式容量超过配额时，即使没有消息也可能返回 `10047`。`retention` 可选 `limits`、`interest`、`workqueue`。`maxAge=0` 表示不限制年龄，`duplicates=0` 由服务端确定，不代表关闭去重；时长范围由服务端校验，`maxAge` 大于 0 时，去重窗口不得超过它。时长使用 Go 单位，不支持 `d`。`ackWait` 必须大于 0；`maxDeliver`、`maxAckPending` 的范围由服务端校验。`workers=0` 按 1 处理，`maxMessages=0` 为有效 workers 的两倍，不含处理中的消息；workers、maxMessages、retryDelay 不得为负。其余参数沿用 Default，不支持 `enabled`、热更新或完整 SDK 配置。
 
 Core 的 `queue` 非空时，`subscribers` 必填且必须大于 1，控制当前 Client 创建的同组订阅数，示例设为 4，Handler 须支持并发；`queue` 为空时广播，忽略此数量且始终只有一个订阅。
 
-Handler 引用必须与登记名称完全一致，区分大小写；包级函数自动使用原始函数名，方法值和闭包用 `MustRegister(handler, name)` 显式命名。Durable 与 Handler 名称独立，函数重命名不应改变 Durable。只启动文件列出的消费者；新增使用已有 Handler 的消费者只需增加 YAML 项，新增处理逻辑再补登记。删除配置项后重启仅停用本进程对应消费，远端 Stream/Durable 和进度保留，不影响其他进程。三份列表可为空，但全局副本数仍必填。
+Handler 引用必须与登记名称完全一致，区分大小写；包级函数自动使用原始函数名，方法值和闭包用 `MustRegister(handler, name)` 显式命名。Durable 与 Handler 名称独立，函数重命名不应改变 Durable。只启动文件列出的消费者；新增使用已有 Handler 的消费者只需增加 YAML 项，新增处理逻辑再补登记。删除配置项后重启仅停用本进程对应消费，远端 Stream/Durable 和进度保留，不影响其他进程。streams、coreConsumers 及每项 consumers 均可省略、为 null 或空列表，但全局副本数仍必填。每项 Stream 必须声明非空 subjects 并统一创建或校验，不支持仅引用外部 Stream。旧顶层 jetStreamConsumers 和消费者的 stream 字段必须删除，否则严格解析会拒绝启动。
 
 从旧代码声明迁移时，Consumer 的 AckWait 从 30s 改为 60s、MaxDeliver 从 3 改为 5、本地 Workers 从 2 改为 1、RetryDelay 从 1s 改为 0。过滤主题使用 Default 的 FilterSubjects，服务端须支持 NATS Server 2.10 或以上。已有远端配置不一致时须在部署前显式对齐；启动不会自动更新或删除已有资源。Demo 使用独立 `pixiu_demo` 命名空间，原来的 `PIXIU_DEMO_TASKS` 及其消费进度仍保留。后续升级 Pixiu 若 Default 改变，同样要检查已有资源兼容性。LimitsPolicy 下 ACK 不删除消息，Demo 默认不设 Stream 容量上限，仍受账户及服务端配额、90 天保留期限限制；显式设置容量后满额拒绝新消息。
 

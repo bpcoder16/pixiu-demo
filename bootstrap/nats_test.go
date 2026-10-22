@@ -25,6 +25,18 @@ import (
 )
 
 func TestExamplesPublishAndConsumeAcrossInstances(t *testing.T) {
+	for _, uncomment := range []bool{false, true} {
+		name := "defaults"
+		if uncomment {
+			name = "uncommented-options"
+		}
+		t.Run(name, func(t *testing.T) {
+			testExamplesPublishAndConsumeAcrossInstances(t, uncomment)
+		})
+	}
+}
+
+func testExamplesPublishAndConsumeAcrossInstances(t *testing.T, uncomment bool) {
 	if !initExampleProcess(t) {
 		return
 	}
@@ -56,7 +68,7 @@ func TestExamplesPublishAndConsumeAcrossInstances(t *testing.T) {
 	var services []apprun.Service
 	ran := make(chan error, 2)
 	for _, name := range []string{"first", "second"} {
-		writeExampleRegistration(t, name)
+		writeExampleRegistrationWithOptions(t, name, uncomment)
 		service, err := bootstrap.NewNATSConsumerService(name, natshandler.JetStreamRegistry, natshandler.CoreRegistry)
 		if err != nil {
 			t.Fatal(err)
@@ -101,8 +113,12 @@ func TestExamplesPublishAndConsumeAcrossInstances(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := stream.CachedInfo().Config.MaxBytes; got != -1 {
-		t.Fatalf("Demo Stream 应沿用默认不限量配置，实际为 %d 字节", got)
+	wantMaxBytes := int64(-1)
+	if uncomment {
+		wantMaxBytes = 100 << 20
+	}
+	if got := stream.CachedInfo().Config.MaxBytes; got != wantMaxBytes {
+		t.Fatalf("Demo Stream 容量配置未生效: got %d, want %d", got, wantMaxBytes)
 	}
 	consumer, err := first.JetStream().Consumer(ctx, "PIXIU_DEMO_TASKS", "demo-worker")
 	if err != nil {
@@ -296,9 +312,22 @@ func initExampleProcess(t *testing.T) bool {
 
 func writeExampleRegistration(t *testing.T, name string) {
 	t.Helper()
+	writeExampleRegistrationWithOptions(t, name, false)
+}
+
+func writeExampleRegistrationWithOptions(t *testing.T, name string, uncomment bool) {
+	t.Helper()
 	content, err := os.ReadFile("../conf.example/nats-register.demo.yaml")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if uncomment {
+		// 只移除可选配置的注释标记，验证迁移后的缩进及参数在真实注册中生效。
+		optional := regexp.MustCompile(`(?m)^( *)# ( *)(replicas|maxBytes|retention|maxAge|duplicates|ackWait|maxDeliver|maxAckPending|consume|workers|maxMessages|retryDelay):`)
+		if got := len(optional.FindAll(content, -1)); got != 12 {
+			t.Fatalf("模板应保留全部可选参数的注释示例，实际 %d 项", got)
+		}
+		content = optional.ReplaceAll(content, []byte("${1}${2}${3}:"))
 	}
 	if err := os.WriteFile(filepath.Join(env.ConfigDirPath(), "nats-register."+name+".yaml"), content, 0o600); err != nil {
 		t.Fatal(err)
