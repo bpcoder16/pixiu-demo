@@ -27,7 +27,7 @@ log:
   dir: "./log"
   # 额外的命名 Logger，可通过 logit.Named(name) 或 WithLoggerName(ctx, name) 选择。
   # 默认文件为 debug.log / info.log / wf.log（Warn、Error、Fatal）；命名 Logger 增加 <name>. 前缀。
-  names: ["http", "cron"]
+  names: ["http", "cron", "nats"]
   # 固定使用 rotatefile；时间戳和轮转边界使用进程本地时区。
   rotate:
     # 按本地整小时（1h）或整天（24h）轮转，默认 1h。

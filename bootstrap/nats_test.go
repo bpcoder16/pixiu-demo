@@ -17,6 +17,7 @@ import (
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
 	"github.com/bpcoder16/pixiu/infra/apprun"
+	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/infra/natsx"
 	"github.com/bpcoder16/pixiu/logit"
@@ -42,25 +43,37 @@ func testExamplesPublishAndConsumeAcrossInstances(t *testing.T, uncomment bool) 
 	}
 	// 两个真实客户端同时运行示例，验证广播、Queue 和共享 Durable 的装配。
 	records := make(chan exampleLog, 32)
-	logger := logit.MustNew(
-		logit.OptEncoder(logit.DefaultJSONEncoder),
-		logit.OptWriter(logit.NewWriter(exampleLogWriter(func(p []byte) (int, error) {
-			var record exampleLog
-			if err := json.Unmarshal(p, &record); err != nil {
-				return 0, err
+	for _, route := range []string{"default", "http", "nats"} {
+		logger := logit.MustNew(
+			logit.OptEncoder(logit.DefaultJSONEncoder),
+			logit.OptWriter(logit.NewWriter(exampleLogWriter(func(p []byte) (int, error) {
+				var record exampleLog
+				if err := json.Unmarshal(p, &record); err != nil {
+					return 0, err
+				}
+				if strings.HasPrefix(record.Message, "DemoNATS") {
+					record.Route = route
+					records <- record
+				}
+				return len(p), nil
+			}))),
+		)
+		previous := logit.Named(route)
+		if route == "default" {
+			previous = logit.Default()
+			logit.SetDefault(logger)
+		} else {
+			logit.SetNamed(route, logger)
+		}
+		t.Cleanup(func() {
+			if route == "default" {
+				logit.SetDefault(previous)
+			} else {
+				logit.SetNamed(route, previous)
 			}
-			if strings.HasPrefix(record.Message, "DemoNATS") {
-				records <- record
-			}
-			return len(p), nil
-		}))),
-	)
-	previous := logit.Default()
-	logit.SetDefault(logger)
-	t.Cleanup(func() {
-		logit.SetDefault(previous)
-		_ = logit.Close(logger)
-	})
+			_ = logit.Close(logger)
+		})
+	}
 	s := startExampleServer(t)
 	url := s.ClientURL()
 	first := newExampleClient(t, url, "first", true)
@@ -82,7 +95,7 @@ func testExamplesPublishAndConsumeAcrossInstances(t *testing.T, uncomment bool) 
 		go func() { ran <- service.Run() }()
 	}
 
-	ctx, cancel := context.WithTimeout(logit.WithContextLogID(context.Background()), 10*time.Second)
+	ctx, cancel := context.WithTimeout(logit.WithContextLogID(logit.WithLoggerName(context.Background(), "http")), 10*time.Second)
 	defer cancel()
 	// Run 异步注册；服务端收到全部 Core 订阅后才发布，避免广播在启动期间丢失。
 	for subject, want := range map[string]int{"pixiu.demo.broadcast": 2, "pixiu.demo.queue": 8} {
@@ -169,6 +182,13 @@ func testExamplesPublishAndConsumeAcrossInstances(t *testing.T, uncomment bool) 
 	traceID, _ := logit.LogIDFromContext(ctx)
 	for len(records) > 0 {
 		record := <-records
+		wantRoute := "nats"
+		if record.Message == "DemoNATSPublish" {
+			wantRoute = "http"
+		}
+		if record.Route != wantRoute {
+			t.Fatalf("发布及消费业务日志归属错误: got %+v, want %s", record, wantRoute)
+		}
 		counts[record.Message]++
 		if record.Data != "" {
 			bodies[record.Message+":"+record.Data]++
@@ -271,10 +291,18 @@ func newExampleClient(t *testing.T, url, name string, isDefault bool) *natsx.Cli
 	if isDefault {
 		newClient = natsx.NewDefault
 	}
-	client, err := newClient(natsx.Config{
-		Name: name,
-		URLs: []string{url},
-	})
+	cfg, err := configx.Parse[natsx.Config]("../conf.example/nats.demo.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LoggerName != "nats" {
+		t.Fatalf("Demo 连接模板必须配置 nats 日志路由: %q", cfg.LoggerName)
+	}
+	// 测试只替换连接地址、实例名及 namespace，消费声明仍来自真实模板。
+	cfg.Name = name
+	cfg.URLs = []string{url}
+	cfg.Namespace = ""
+	client, err := newClient(*cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,8 +351,8 @@ func writeExampleRegistrationWithOptions(t *testing.T, name string, uncomment bo
 	}
 	if uncomment {
 		// 只移除可选配置的注释标记，验证迁移后的缩进及参数在真实注册中生效。
-		optional := regexp.MustCompile(`(?m)^( *)# ( *)(replicas|maxBytes|retention|maxAge|duplicates|ackWait|maxDeliver|maxAckPending|consume|workers|maxMessages|retryDelay):`)
-		if got := len(optional.FindAll(content, -1)); got != 12 {
+		optional := regexp.MustCompile(`(?m)^( *)# ( *)(streamDefaults|replicas|maxBytes|retention|maxAge|duplicates|ackWait|maxDeliver|maxAckPending|consume|workers|maxMessages|retryDelay):`)
+		if got := len(optional.FindAll(content, -1)); got != 14 {
 			t.Fatalf("模板应保留全部可选参数的注释示例，实际 %d 项", got)
 		}
 		content = optional.ReplaceAll(content, []byte("${1}${2}${3}:"))
@@ -335,6 +363,7 @@ func writeExampleRegistrationWithOptions(t *testing.T, name string, uncomment bo
 }
 
 type exampleLog struct {
+	Route    string `json:"-"`
 	Message  string `json:"msg"`
 	Data     string `json:"data"`
 	LogID    string `json:"logId"`

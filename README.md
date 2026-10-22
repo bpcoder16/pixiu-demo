@@ -37,14 +37,14 @@ cp -n conf.example/*.yaml conf/
 | --- | --- |
 | [`app.yaml`](conf.example/app.yaml) | 应用名、运行模式、时区、日志目录和轮转 |
 | [`gin.yaml`](conf.example/gin.yaml) | 请求日志、可信代理和详情采集；模板默认开启请求/响应详情 |
-| [`http.yaml`](conf.example/http.yaml) | 监听地址、请求超时和关闭期限，模板监听 `:8888` |
-| [`cron.yaml`](conf.example/cron.yaml) | 心跳任务、执行间隔、任务超时及 Cron 关闭期限 |
+| [`http.yaml`](conf.example/http.yaml) | 监听地址及网络读写超时；服务统一排空，模板监听 `:8888` |
+| [`cron.yaml`](conf.example/cron.yaml) | 心跳任务、执行间隔、任务超时及可选分布式锁 |
 | [`mysql.demo.yaml`](conf.example/mysql.demo.yaml) | 默认 MySQL 主库、可选从库及连接池 |
 | [`migrate.demo.yaml`](conf.example/migrate.demo.yaml) | Model 自动迁移开关和整体期限；模板已开启，当前表清单为空 |
 | [`redis.demo.yaml`](conf.example/redis.demo.yaml) | 默认 Redis 连接、重试和连接池 |
 | [`elasticsearch.demo.yaml`](conf.example/elasticsearch.demo.yaml) | 默认 ES 数据面实例；版本须与实际服务端一致 |
 | [`aliyunossx.demo.yaml`](conf.example/aliyunossx.demo.yaml) | 默认阿里云 OSS 实例，固定 Region、Bucket 和访问凭据 |
-| [`aliyunesx.demo.yaml`](conf.example/aliyunesx.demo.yaml) | 默认阿里云 ES 管理 API 实例，固定 Region、InstanceID 和访问凭据；慢调用阈值 200ms |
+| [`aliyunesx.demo.yaml`](conf.example/aliyunesx.demo.yaml) | 默认阿里云 ES 管理 API 实例，固定 Region、InstanceID 和访问凭据；慢调用阈值 500ms |
 | [`nats.demo.yaml`](conf.example/nats.demo.yaml) | 默认 NATS 连接、可选环境前缀及排空期限 |
 | [`nats-register.demo.yaml`](conf.example/nats-register.demo.yaml) | Stream、JetStream/Core Consumer 声明及 Handler 绑定 |
 
@@ -65,6 +65,8 @@ go run .
 
 [`nats-register.demo.yaml`](conf.example/nats-register.demo.yaml) 集中声明 Stream 和消费者；JetStream 消费者嵌套在 `streams[].consumers`，自动继承所属 Stream 的 name，同一 Stream 可配置多个消费者；[`registry.go`](internal/natshandler/registry.go) 与消费 Handler 同包，通过包级 `JetStreamRegistry` 和 `CoreRegistry` 集中声明处理函数，自动使用原始函数名，不获取客户端或启动消费。消费入口在 [`natshandler`](internal/natshandler/handler.go)，业务流程在 [`nats.Service`](internal/service/nats/service.go)，实际发送在 [`natspublisher`](internal/natspublisher/publish.go)。[`bootstrap/start.go`](bootstrap/start.go) 使用注册表装配消费服务；Handler 在处理消息时通过 `NewService()` 获取 Service，复用已初始化的 demo 客户端。服务端须开启 JetStream，例如本地执行 `nats-server -js`，再按前文配置其余基础设施并运行应用；客户端的 `jetStream` 配置不会开启服务端功能。
 
+`nats.demo.yaml` 配置 `loggerName: "nats"`，`app.yaml` 的 `log.names` 同时声明 http、cron、nats。连接、重连、关闭、异步错误、订阅及消费日志归入 `nats.info.log` / `nats.wf.log` 等命名日志；消费 Handler 和下游调用沿用消息 ctx。HTTP/Cron 中发布 NATS 的调用日志分别跟随 http/cron ctx，异步 PubAck 失败通知使用客户端 nats 路由。省略、空值或名称未注册时回退默认 Logger。
+
 可选环境前缀 `namespace` 只在 `nats.demo.yaml` 配置，省略、`null` 或空字符串时不启用，Demo 模板使用 `pixiu_demo`；非空值只允许英文字母、数字、`_`、`-`，初始化后固定。注册配置及发布、Request 均填写原始名称和主题，由 Client 统一添加前缀。Demo 实际 Stream 为 `pixiu_demo_PIXIU_DEMO_TASKS`，持久化主题为 `pixiu_demo.pixiu.demo.tasks`，Durable 为 `pixiu_demo_demo-worker`；Core 消费声明名称及非空 queue 同样添加 `pixiu_demo_`。Handler 引用名称不变，回调主题保留前缀；修改前缀不迁移或删除旧 Stream/Durable。下表列出未添加前缀的原始名称。
 
 | 通道 | 启动声明 | 消费方式 |
@@ -75,13 +77,16 @@ go run .
 
 启动注册：MustInit 初始化共享客户端并执行 MySQL 迁移；Start 的工厂装配消费链路，调用 `bootstrap.NewNATSConsumerService(nats.DemoName, natshandler.JetStreamRegistry, natshandler.CoreRegistry)`，读取配置、绑定 Handler，返回服务和构造错误。Run 使用可由 Stop 取消的注册 context，依次注册 Stream、JetStream 和 Core；Stop 不等待远端注册完成。各注册入口每 Client 只调用一次，注册失败由管理器清理已启动部分，远端资源保留。Start 并发 Run，登记顺序不保证就绪；Handler 依赖须提前准备。
 
-注册文件是必需文件，缺失或未知字段会阻止启动。`streamDefaults.replicas` 始终必填且为正整数，同时作为逐项副本数的上限，即使没有 Stream 或全部 Stream 都有覆盖值；单个 Stream 的 `replicas` 省略、`null` 或解码后不大于 0 时继承全局值，正值不得超过全局值，解码及数字转换沿用 Pixiu 的 `configx`。示例全局值为 1，适用于单节点；多副本须具备相应服务端条件。
+注册文件是必需文件，缺失或未知字段会阻止启动。`streamDefaults` 或其中的 `replicas` 省略、设为 `null` 时，全局副本数使用对应 NATS 实例初始化时 `urls` 的条目数；显式配置必须为正整数，0 或负数报错。最终全局值作为逐项副本数上限，即使没有 Stream 也校验。单个 Stream 的 `replicas` 省略、`null` 或解码后不大于 0 时继承全局值，正值不得超过全局值，解码及数字转换沿用 Pixiu 的 `configx`。
 
-注册模板中的可选调参项均以注释展示，按需取消注释；消费者参数随声明一起嵌套在 `streams[].consumers[]` 下，`consume` 子字段再缩进一级；省略或设为 `null` 时沿用 natsx Default：
+自动计数不去重、不计入自动发现节点、不裁剪上限，要求 `urls` 完整且不重复列出同一 JetStream 集群节点；仅列种子地址、使用代理入口或需要不同副本策略时，应取消模板中 `streamDefaults.replicas` 的注释并显式配置。副本数最大为 5，通常选 1、3、5，服务端继续校验范围和集群条件。Demo 模板只有一个 URL，默认推导为 1。
+
+注册模板中的可选调参项均以注释展示，按需取消注释；消费者参数随声明一起嵌套在 `streams[].consumers[]` 下，`consume` 子字段再缩进一级；省略或设为 `null` 时，副本数按上述规则确定，其余参数沿用 natsx Default：
 
 | 位置 | 可选字段与默认值 |
 | --- | --- |
-| `streams[]` | `maxBytes: -1`（不设 Stream 容量上限）、`retention: "limits"`、`maxAge: "2160h"`、`duplicates: "2m"` |
+| `streamDefaults` | `replicas` 默认使用初始化时的 URL 条目数 |
+| `streams[]` | `replicas` 默认继承全局值；`maxBytes: -1`（不设 Stream 容量上限）、`retention: "limits"`、`maxAge: "2160h"`、`duplicates: "2m"` |
 | `streams[].consumers[]` | `ackWait: "60s"`、`maxDeliver: 5`、`maxAckPending: 1000`、`retryDelay: "0s"` |
 | `streams[].consumers[].consume` | `workers: 1`、`maxMessages: 0` |
 
@@ -89,7 +94,7 @@ go run .
 
 Core 的 `queue` 非空时，`subscribers` 必填且必须大于 1，控制当前 Client 创建的同组订阅数，示例设为 4，Handler 须支持并发；`queue` 为空时广播，忽略此数量且始终只有一个订阅。
 
-Handler 引用必须与登记名称完全一致，区分大小写；包级函数自动使用原始函数名，方法值和闭包用 `MustRegister(handler, name)` 显式命名。Durable 与 Handler 名称独立，函数重命名不应改变 Durable。只启动文件列出的消费者；新增使用已有 Handler 的消费者只需增加 YAML 项，新增处理逻辑再补登记。删除配置项后重启仅停用本进程对应消费，远端 Stream/Durable 和进度保留，不影响其他进程。streams、coreConsumers 及每项 consumers 均可省略、为 null 或空列表，但全局副本数仍必填。每项 Stream 必须声明非空 subjects 并统一创建或校验，不支持仅引用外部 Stream。旧顶层 jetStreamConsumers 和消费者的 stream 字段必须删除，否则严格解析会拒绝启动。
+Handler 引用必须与登记名称完全一致，区分大小写；包级函数自动使用原始函数名，方法值和闭包用 `MustRegister(handler, name)` 显式命名。Durable 与 Handler 名称独立，函数重命名不应改变 Durable。只启动文件列出的消费者；新增使用已有 Handler 的消费者只需增加 YAML 项，新增处理逻辑再补登记。删除配置项后重启仅停用本进程对应消费，远端 Stream/Durable 和进度保留，不影响其他进程。streams、coreConsumers 及每项 consumers 均可省略、为 null 或空列表，全局副本数仍按显式配置或初始化时的 URL 条目数确定并校验。每项 Stream 必须声明非空 subjects 并统一创建或校验，不支持仅引用外部 Stream。旧顶层 jetStreamConsumers 和消费者的 stream 字段必须删除，否则严格解析会拒绝启动。
 
 从旧代码声明迁移时，Consumer 的 AckWait 从 30s 改为 60s、MaxDeliver 从 3 改为 5、本地 Workers 从 2 改为 1、RetryDelay 从 1s 改为 0。过滤主题使用 Default 的 FilterSubjects，服务端须支持 NATS Server 2.10 或以上。已有远端配置不一致时须在部署前显式对齐；启动不会自动更新或删除已有资源。Demo 使用独立 `pixiu_demo` 命名空间，原来的 `PIXIU_DEMO_TASKS` 及其消费进度仍保留。后续升级 Pixiu 若 Default 改变，同样要检查已有资源兼容性。LimitsPolicy 下 ACK 不删除消息，Demo 默认不设 Stream 容量上限，仍受账户及服务端配额、90 天保留期限限制；显式设置容量后满额拒绝新消息。
 
