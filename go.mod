@@ -1,6 +1,6 @@
 module pixiu-demo
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/bpcoder16/pixiu v0.0.0-20261014072453-6751af9e5fa7
