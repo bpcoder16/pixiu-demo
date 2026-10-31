@@ -115,7 +115,7 @@ curl -sS -X POST 'http://127.0.0.1:8888/api/app/nats/publish'
 
 两种 JetStream 发布都要求非空 messageID，Service 使用 Go 1.27 标准库 `uuid.New().String()` 为每次调用生成批次前缀，再分别加 `:sync`、`:async`。重复调用（包括失败后重试）会生成新批次并重新发送四种消息，接口不提供跨调用去重。去重只在同一 Stream 的服务端窗口内生效，不能替代业务幂等。异步 ctx 只用于提交前检查、日志和追踪，取消等待不撤销已提交消息；`PublishAsyncTimeout` 在 [`nats.demo.yaml`](conf.example/nats.demo.yaml) 中配置，默认 5 秒，与消费者 AckWait 无关。超时不保证消息未写入，再次调用会使用新 ID，可能产生重复业务消息。异步方法复制 data/Header，返回后可复用输入，不要修改 `future.Msg()`。
 
-在 `log/pixiu-demo/biz/info.log` 查看上述 `DemoNATS*` 记录。启动多个连接同一 NATS 的应用实例（HTTP 需使用不同端口），调用测试接口可观察广播与 Queue 的差异。
+在 `log/pixiu-demo/biz/nats.info.log` 查看消费记录，在 `http.info.log` 查看 HTTP 发起的 `DemoNATSPublish` 确认记录；未声明命名 Logger 时回退 `info.log`。启动多个连接同一 NATS 的应用实例（HTTP 需使用不同端口），调用测试接口可观察广播与 Queue 的差异。
 
 退出排空：HTTP、Cron、NATS 统一停止接收新工作，共享 30 秒等待已接纳任务完成。NATS StopConsumers 停止新增接收，SDK pending 继续排空；期间消息 context 有效，Named/Default、发布、请求及 ACK 可继续使用。30 秒后 Cancel 未完成任务并回收资源，NATS 可强制关闭连接，剩余业务可能失败。资源栈默认整体 20 秒，逆序回收、日志最后关闭；到期立即交回 main 退出。业务不自行关闭共享客户端或在回调内等待自身关闭，CloseAll 开始后的命名查询仍 panic。
 
@@ -152,12 +152,13 @@ cp -n conf.example/cron.yaml conf/
 | `log/pixiu-demo/biz/wf.log` | 默认 Logger 的 Warn、Error、Fatal 日志 |
 | `log/pixiu-demo/biz/http.*.log` | HTTP 命名 Logger 的分级日志，访问日志写入 `http.info.log` |
 | `log/pixiu-demo/biz/cron.*.log` | Cron 命名 Logger 的分级日志，心跳和成功结果写入 `cron.info.log` |
+| `log/pixiu-demo/biz/nats.*.log` | NATS 命名 Logger 的分级日志，消费业务记录写入 `nats.info.log` |
 | `log/pixiu-demo/std/stdout.log` | stdout 原始输出 |
 | `log/pixiu-demo/std/stderr.log` | stderr 原始输出 |
 
 修改应用名或日志目录后，路径随配置变化。业务日志按模板使用小时轮转，每个分流文件的保留上限为 48 个实际文件（包含当前时段），整点清理完成前可能暂时超限；debug/test 输出 Debug 及以上，release 输出 Info 及以上。
 
-模板的 `log.names` 包含 `http` 和 `cron`；已有 `conf/app.yaml` 时可在该列表加入 `cron` 以启用独立任务日志文件，未声明时 Cron 日志回退到默认 Logger。
+模板的 `log.names` 包含 `http`、`cron` 和 `nats`；已有 `conf/app.yaml` 时可在该列表补充名称以启用独立日志文件，未声明时回退到默认 Logger。
 
 `log.hookStd` 默认开启，模板也设置为 true，stdout/stderr 会重定向到上述 `std/` 文件，持续至进程退出。这两个原始输出文件不轮转。该能力仅支持 Linux/macOS；其他平台或需要保留终端标准输出时，在 `conf/app.yaml` 的 `log` 段设置 `hookStd: false`，业务日志仍写入 `biz/` 文件。
 
