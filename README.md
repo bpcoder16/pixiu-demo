@@ -2,11 +2,11 @@
 
 基于 [Pixiu](https://github.com/bpcoder16/pixiu)、Gin 和 GORM 的 Go HTTP 服务基础骨架，用于演示项目分层、统一响应、基础设施装配、日志和资源生命周期。
 
-当前提供两个公开 Ping 样例、OSS 文件上传、ES 同义词词库验证与搜索分析器重载、阿里云 ES 同义词词典查询与更新、实例详情查询接口、MySQL 主从会话入口、Redis、Elasticsearch、阿里云 OSS、阿里云 ES、NATS 默认实例及消息收发示例，以及 App/Admin 分模块的 OpenAPI 文档。项目没有身份认证或令牌处理；接入实际业务时自行实现相应规则。
+当前提供两个公开 Ping 样例、OSS 文件上传、ES 同义词词库验证与搜索分析器重载、阿里云 ES 同义词词典查询与更新、实例详情查询接口、MySQL 主从会话入口、Redis、Elasticsearch、阿里云 OSS、阿里云 ES、NATS 默认实例及消息收发示例、WebSocket 自定义会话与 JSON/PB 收发，以及 App/Admin 分模块的 OpenAPI 文档。项目没有身份认证或令牌处理；接入实际业务时自行实现相应规则。
 
-应用入口使用 Pixiu 的 `biz/appconfig`，直接将配置传给 `bootstrap.MustBaseInit`；env/log 文件结构保持不变。HTTP 和 Cron 通过 `bootstrap.Start` 一起运行，示例任务每 10 秒记录一次心跳日志。
+应用入口使用 Pixiu 的 `biz/appconfig`，直接将配置传给 `bootstrap.MustBaseInit`；env/log 文件结构保持不变。HTTP、WebSocket、NATS 和 Cron 通过 `bootstrap.Start` 一起运行，示例任务每 10 秒记录一次心跳日志。
 
-启动入口将 NATS、HTTP、Cron 的构造函数传给 bootstrap.Start，统一构造、登记并接管 SIGINT/SIGTERM。失败时清理已构造服务；运行期统一停收，共享默认 30 秒并行排空，超时取消剩余任务。随后 main 回收资源栈，整体默认 20 秒。
+启动入口将 NATS、WebSocket、HTTP、Cron 的构造函数传给 bootstrap.Start，统一构造、登记并接管 SIGINT/SIGTERM。失败时清理已构造服务；运行期统一停收，共享默认 30 秒并行排空，超时取消剩余任务。随后 main 回收资源栈，整体默认 20 秒。
 
 ## 开发环境与启动
 
@@ -38,6 +38,7 @@ cp -n conf.example/*.yaml conf/
 | [`app.yaml`](conf.example/app.yaml) | 应用名、运行模式、时区、日志目录和轮转 |
 | [`gin.yaml`](conf.example/gin.yaml) | 请求日志、可信代理和详情采集；模板默认开启请求/响应详情 |
 | [`http.yaml`](conf.example/http.yaml) | 监听地址及网络读写超时；服务统一排空，模板监听 `:8888` |
+| [`websocket.app.yaml`](conf.example/websocket.app.yaml) | 独立 WebSocket 监听 `:8889`、升级路径 `/ws/app`；与 Gin API 分开配置 |
 | [`cron.yaml`](conf.example/cron.yaml) | 心跳任务、执行间隔、任务超时及可选分布式锁 |
 | [`mysql.demo.yaml`](conf.example/mysql.demo.yaml) | 默认 MySQL 主库、可选从库及连接池 |
 | [`migrate.demo.yaml`](conf.example/migrate.demo.yaml) | Model 自动迁移开关和整体期限；模板已开启，当前表清单为空 |
@@ -50,7 +51,7 @@ cp -n conf.example/*.yaml conf/
 
 基础设施实例名统一为 `demo`，由 `bootstrap.MustInit` 注册；配置文件中无需再次指定实例名或默认标识。启动会初始化全部六类基础设施，即使只访问 Ping，也需完成初始化。阿里云 OSS 和阿里云 ES 初始化只校验配置并构造客户端，不联网验活；实际访问时再验证凭据、权限和资源可用性。
 
-实例声明完成后，`MustBaseInit` 先应用环境时区，再依次初始化日志 → 阿里云 OSS → 阿里云 ES → MySQL → Redis → Elasticsearch → NATS。随后 `MustInit` 执行 MySQL 迁移，成功返回后再由 `Start` 构造并启动 NATS 消费、HTTP、Cron；启动不发布示例消息。跨组件的声明顺序不改变上述初始化顺序；同一组件按声明顺序初始化、逆序关闭，依赖实例须先声明。
+实例声明完成后，`MustBaseInit` 先应用环境时区，再依次初始化日志 → 阿里云 OSS → 阿里云 ES → MySQL → Redis → Elasticsearch → NATS。随后 `MustInit` 执行 MySQL 迁移，成功返回后再由 `Start` 构造并启动 NATS 消费、WebSocket、HTTP、Cron；启动不发布示例消息。跨组件的声明顺序不改变上述初始化顺序；同一组件按声明顺序初始化、逆序关闭，依赖实例须先声明。
 
 模板使用 `debug` 模式，启动前须生成接口文档：
 
@@ -60,6 +61,112 @@ go run .
 ```
 
 入口固定加载 `./conf/app.yaml`，运行时工作目录须包含 `conf/`。`release` 模式关闭文档路由，不要求生成文档；`debug`、`test` 模式在文档未生成时拒绝启动。
+
+## WebSocket 会话与 JSON/PB 示例
+
+此示例仅覆盖 bootstrap 接入、Session 自定义端状态和 JSON/PB 收发。Gin API 使用 `http.yaml`，默认 `:8888`；WebSocket 使用独立的 `websocket.app.yaml`，默认 `:8889`。两者复用 Pixiu `infra/httpserver` 的实现，各自创建监听实例。尚未实现业务消息 Route 注册表、按用户/设备寻址或 Redis/NATS 推送适配。
+
+| 入口/文件 | 作用 |
+| --- | --- |
+| `GET :8889/ws/app` | WebSocket Upgrade，通过子协议协商 JSON 或 PB |
+| `GET :8889/ready/ws` | 此 WebSocket 实例就绪时返回 204，否则返回 503；不代表全应用就绪 |
+| [`bootstrap/start.go`](bootstrap/start.go) | 并列注册 `NewWebSocketService("app", wshandler.NewServer)` 与 `NewGinHTTPService` |
+| [`internal/wshandler/server.go`](internal/wshandler/server.go) | 模拟身份、自定义端状态、建连事件及单一业务消息处理 |
+| [`internal/wspb/client.proto`](internal/wspb/client.proto) | JSON/PB 共用的业务定义及已生成的 Go 类型 |
+| [`cmd/wsreview/main.go`](cmd/wsreview/main.go) | JSON/PB 客户端，默认连接 `ws://127.0.0.1:8889/ws/app` |
+
+WebSocket 端口只提供升级入口和就绪探针，两者仅允许 GET，其他方法含 HEAD 返回 405 与 `Allow: GET`，其他路径返回 404，不经过 Gin。Gin 端口保留 API、App/Admin 文档及 404/405 语义；`NewGinHTTPService` 负责设置模式及读取 `gin.yaml`、`http.yaml`，test/debug 仍要求文档，release 仍关闭文档。
+
+`NewWebSocketService` 在构造阶段调用工厂创建全新 Server，不监听端口；构造成功后拥有该 Server，业务不得再单独运行或登记内部 Server。管理器中只有一个 `websocket:app` 服务，同时控制 HTTP 监听与所有升级连接。Run 启动两部分，客户端以此端口 `/ready/ws` 的 204 确认就绪；Stop 封闭接纳并启动两侧排空，Wait 共享外层期限等待 HTTP、会话回调、OnClose 及内部 Run 实际结束，Cancel 同时通知两部分。监听失败会触发统一停机，SIGINT/SIGTERM 后最后仍由 main 回收资源和日志。
+
+多端可以继续在 `bootstrap.Start` 中增加工厂。以下为扩展示例，demo 当前只启用 `app`；为其他端提供自己的业务工厂，或复用每次创建全新 Server 的工厂：
+
+```go
+func() (apprun.Service, error) {
+    return bootstrap.NewWebSocketService("web", webhandler.NewServer)
+},
+func() (apprun.Service, error) {
+    return bootstrap.NewWebSocketService("admin", adminhandler.NewServer)
+},
+```
+
+| 服务名 | 必需配置文件 | 示例监听 |
+| --- | --- | --- |
+| `websocket:app` | `websocket.app.yaml` | `:8889` |
+| `websocket:web` | `websocket.web.yaml` | `:8890` |
+| `websocket:admin` | `websocket.admin.yaml` | `:8891` |
+
+各实例的认证、状态、连接限额由各自工厂配置；服务名重复会在登记时报错，端口重复会在 Run 时监听失败。配置只在构造时读取，不注册全局 Server。多个端口仍共享进程资源和管理器的统一失败退出策略，不提供进程级故障隔离，也不自动产生管理端权限控制。HTTP 请求日志不再覆盖 WebSocket 握手，业务认证和连接日志作用域由 realtime/websocketx 负责。
+
+已有本地配置目录需补上新文件（不覆盖现有配置）：
+
+```bash
+cp -n conf.example/websocket.app.yaml conf/
+```
+
+**端身份与状态：**`demoAuthenticate` 明确使用模拟身份 `demo-user` / `demo-device` / `demo-tenant`，所有连接相同，未验证登录凭据。实际接入时在此验证凭据后填写 `ClientInfo`，不要直接信任客户端声称的 userId。`ClientInfo.Value` 保存业务类型 `TerminalInfo{Platform, AppVersion}`，是不可变身份信息；`NewState` 每次创建独立的 `*ClientState`，通过 `Session.State()` 获取，保存可变的 page 和 revision。状态更新在锁内完成并返回值快照；连接断开后不持久化，重连或新连接从 revision 0 重新开始，不以设备 ID 共享状态。
+
+**收发流程：**OnOpen 使用 `Session.Send` 主动发送 `session/connected` 事件；OnMessage 直接判断 `client/setPage`，将正文 Decode 到独立的 `wspb.SetPageRequest` 对象，更新端状态，再用 `Session.Reply` 返回 `StateReply`。不支持的 scene/action 返回 `NOT_FOUND`；正文解码错误或 page 不满足 1–128 字节返回 `INVALID_ARGUMENT`，通过 `ReplyError` 显式下发公开文案，发送成功时状态不变且连接继续使用。错误的外层信封或帧类型由 realtime 关闭连接。业务消息不使用 HTTP 的 code/msg 包装。
+
+`Reply`/`ReplyError` 发送失败时，队列或共享预算不足关闭连接并尽力发送关闭码 1013，其他发送失败使用 1011；返回原错误供组件观察，不再尝试经同一队列回复错误。已更新的端状态不回滚；客户端没有收到响应时结果未知，不应自动重试。普通业务错误回复发送成功时仍保持连接。
+
+`OnClose` 使用独立于断连取消的清理 ctx，`Transport.OnCloseTimeout` 在示例中显式设为 5 秒。清理 I/O 应使用回调参数 ctx，不使用已取消的 `Session.Context()`；普通断连、Stop 和 Wait 超时不取消清理，`Server.Cancel` 会取消它。业务必须响应取消，Session/Server 的 Done 仍等待回调实际返回。
+
+`Send` 成功仅代表进入本地有界队列；不表示客户端已收到。Message 只在 OnMessage 回调期间有效，不能保存后异步 Reply。示例建连事件只发送到当前 Session，没有消息总线或分布式推送。
+
+先按前文准备现有基础设施、配置与 OpenAPI，再启动应用：
+
+```bash
+go run .
+```
+
+JSON 请求：
+
+```json
+{"kind":"request","requestId":"r1","scene":"client","action":"setPage","data":{"page":"home"}}
+```
+
+服务器先发送建连事件，再回复请求：
+
+```json
+{"kind":"event","scene":"session","action":"connected","data":{"connectionId":"连接ID"}}
+{"kind":"response","requestId":"r1","scene":"client","action":"setPage","data":{"userId":"demo-user","deviceId":"demo-device","page":"home","revision":"1"}}
+```
+
+`revision` 是 proto 的 uint64，因此 ProtoJSON 使用十进制字符串；JSON data 直接嵌入业务对象，不是 base64。错误响应包含 `error: {"code":"INVALID_ARGUMENT","message":"..."}`，没有 data。
+
+使用命令行客户端验证两种协议，每次运行新建一条连接：
+
+```bash
+go run ./cmd/wsreview -protocol=json -page=home
+go run ./cmd/wsreview -protocol=pb -page=settings
+# 自定义地址或验证业务错误：
+go run ./cmd/wsreview -protocol=pb -url=ws://127.0.0.1:8889/ws/app -page=''
+```
+
+成功输出类似 `connected: <连接ID> (pb)` 和 `user=demo-user device=demo-device page=settings revision=1`；业务错误或网络错误以非零状态退出。PB 使用 `pixiu.realtime.v1.protobuf` 子协议及 Binary 帧：先 `proto.Marshal(SetPageRequest)`，填入 Pixiu `protocol.Envelope_Data`，再编码信封；接收时先解信封，再根据事件/响应选择 `Connected` 或 `StateReply` 解码。客户端有 5 秒握手、写入与等待响应期限。收到合法业务响应（含业务错误响应）后发送 1000 Close，写入关闭帧和等待对端关闭共用最多 1 秒；随后关闭底层连接。关闭握手失败返回错误，已有业务错误会一并保留。
+
+普通构建使用随源码提供的生成物，不需要 protoc。修改业务 proto 后，在 PATH 准备 protoc 32.1 和 protoc-gen-go v1.36.10：
+
+```bash
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10
+go generate ./internal/wspb
+```
+
+生成脚本检查工具版本，以保持生成物可复现。包路径是 `pixiu-demo/internal/wspb`；Pixiu 的外层信封直接复用依赖库提供的 Go 类型，不复制或修改。
+
+无需连接外部 MySQL/Redis/ES/NATS 即可验证此示例：
+
+```bash
+go test -v ./internal/route -run '^TestWebSocketRoundTrip$'
+go test -v ./cmd/wsreview -run '^TestReviewClient$'
+go test -v ./internal/wshandler -run '^TestReplyFailureClosesConnection$'
+go test -v ./bootstrap -run '^TestNATSHTTPWebSocketAndCronStartup$'
+go test ./...
+go test -race ./...
+```
+
+Go 收发与发送失败回归使用临时本地 HTTP/WebSocket 服务；bootstrap 测试使用内嵌 NATS、临时配置和独立子进程，调用实际 `Start()` 并发送 SIGTERM，检查四个服务收尾、普通 HTTP 路径返回 404 及升级后的连接关闭。它们不替代真实业务凭据和外部基础设施的部署验证。
 
 ## NATS 消息示例
 

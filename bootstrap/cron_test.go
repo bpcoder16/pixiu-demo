@@ -96,6 +96,7 @@ func initMixedStartConfig(t *testing.T) string {
 	}
 	writeStartConfig(t, "gin.yaml", "disableAccessLog: true\n")
 	writeStartConfig(t, "http.yaml", fmt.Sprintf("addr: %q\n", addr))
+	writeStartConfig(t, "websocket.app.yaml", "addr: 127.0.0.1:0\npath: /ws/app\n")
 	return addr
 }
 

@@ -105,6 +105,8 @@ func TestHTTPAssemblySmoke(t *testing.T) {
 			path   string
 			status int
 		}{
+			{"/ready/ws", http.StatusNotFound},
+			{"/ws-demo", http.StatusNotFound},
 			{"/openapi/app.json", http.StatusOK},
 			{"/openapi/admin.json", http.StatusOK},
 			{"/docs", http.StatusOK},
