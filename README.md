@@ -64,14 +64,16 @@ go run .
 
 ## WebSocket 会话与 JSON/PB 示例
 
-此示例仅覆盖 bootstrap 接入、Session 自定义端状态和 JSON/PB 收发。Gin API 使用 `http.yaml`，默认 `:8888`；WebSocket 使用独立的 `websocket.app.yaml`，默认 `:8889`。两者复用 Pixiu `infra/httpserver` 的实现，各自创建监听实例。尚未实现业务消息 Route 注册表、按用户/设备寻址或 Redis/NATS 推送适配。
+此示例覆盖 bootstrap 接入、Session 自定义端状态、JSON/PB 收发和上行请求路由。Gin API 使用 `http.yaml`，默认 `:8888`；WebSocket 使用独立的 `websocket.app.yaml`，默认 `:8889`。两者复用 Pixiu `infra/httpserver` 的实现，各自创建监听实例。
 
 | 入口/文件 | 作用 |
 | --- | --- |
 | `GET :8889/ws/app` | WebSocket Upgrade，通过子协议协商 JSON 或 PB |
 | `GET :8889/ready/ws` | 此 WebSocket 实例就绪时返回 204，否则返回 503；不代表全应用就绪 |
 | [`bootstrap/start.go`](bootstrap/start.go) | 并列注册 `NewWebSocketService("app", wshandler.NewServer)` 与 `NewGinHTTPService` |
-| [`internal/wshandler/server.go`](internal/wshandler/server.go) | 模拟身份、自定义端状态、建连事件及单一业务消息处理 |
+| [`internal/wshandler/server.go`](internal/wshandler/server.go) | 装配服务、模拟认证、建连和关闭回调 |
+| [`internal/wshandler/register.go`](internal/wshandler/register.go) | WebSocket 消息注册清单 `wshandler.Register` |
+| [`internal/wshandler/client.go`](internal/wshandler/client.go) | client 场景的端状态与 setPage 处理函数 |
 | [`internal/wspb/client.proto`](internal/wspb/client.proto) | JSON/PB 共用的业务定义及已生成的 Go 类型 |
 
 WebSocket 端口只提供升级入口和就绪探针，两者仅允许 GET，其他方法含 HEAD 返回 405 与 `Allow: GET`，其他路径返回 404，不经过 Gin。Gin 端口保留 API、App/Admin 文档及 404/405 语义；`NewGinHTTPService` 负责设置模式及读取 `gin.yaml`、`http.yaml`，test/debug 仍要求文档，release 仍关闭文档。
@@ -97,7 +99,9 @@ func() (apprun.Service, error) {
 
 各实例的认证、状态、连接限额由各自工厂配置；服务名重复会在登记时报错，端口重复会在 Run 时监听失败。配置只在构造时读取，不注册全局 Server。多个端口仍共享进程资源和管理器的统一失败退出策略，不提供进程级故障隔离，也不自动产生管理端权限控制。HTTP 请求日志不再覆盖 WebSocket 握手，业务认证和连接日志作用域由 realtime/websocketx 负责。
 
-已有本地配置目录需补上新文件（不覆盖现有配置）：
+如果已有 `conf/websocket.app.yaml`，请检查监听字段是否放在旧版 `http:` 下。升级时删除这一行，将其中的 `addr`、超时和其他监听字段移到与 `path` 同级，沿用原有配置值。当前版本会拒绝旧的 `http` 字段。
+
+只有缺少该文件时才需要复制模板。`cp -n` 会跳过已有文件。
 
 ```bash
 cp -n conf.example/websocket.app.yaml conf/
@@ -105,13 +109,15 @@ cp -n conf.example/websocket.app.yaml conf/
 
 **端身份与状态：**`demoAuthenticate` 明确使用模拟身份 `demo-user` / `demo-device`，所有连接相同，未验证登录凭据。实际接入时在此验证凭据后填写 `ClientInfo`，不要直接信任客户端声称的 userId。`ClientInfo.Value` 保存业务类型 `TerminalInfo{Platform, AppVersion}`，是不可变身份信息；`NewState` 每次创建独立的 `*ClientState`，通过 `Session.State()` 获取，保存可变的 page 和 revision。状态更新在锁内完成并返回值快照；连接断开后不持久化，重连或新连接从 revision 0 重新开始，不以设备 ID 共享状态。
 
-**收发流程：**OnOpen 使用 `Session.Send` 主动发送 `type=session.connected` 事件；OnMessage 直接判断上行路由 `client/setPage`，将正文 Decode 到独立的 `wspb.SetPageRequest` 对象，更新端状态，再用 `Session.Reply(ctx, message, "client.state", data)` 返回 `StateReply`。下行统一使用必填的业务字符串 type，不携带 scene/action；响应回显 requestId，事件不携带。不支持的 scene/action 返回 `NOT_FOUND`；正文解码错误或 page 不满足 1–128 字节返回 `INVALID_ARGUMENT`，通过 `ReplyError(ctx, message, "request.error", code, text)` 显式下发公开文案，发送成功时状态不变且连接继续使用。错误的外层信封或帧类型由 realtime 关闭连接。业务消息不使用 HTTP 的 code/msg 包装。
+**上行路由与收发**　服务工厂配置 `RegisterHandlers: Register`。Pixiu 在构造时调用 `wshandler.Register`，封闭注册后按 scene/action 分发。新增动作时，在 `internal/wshandler/` 对应场景文件编写 Handler，并在 `register.go` 中调用 `r.Handle(scene, action, handler)`。有多条注册时逐条检查并返回错误，非法或重复的声明会阻止服务启动。
 
-`Reply`/`ReplyError` 发送失败时，队列或共享预算不足关闭连接并尽力发送关闭码 1013，其他发送失败使用 1011；返回原错误供组件观察，不再尝试经同一队列回复错误。已更新的端状态不回滚；客户端没有收到响应时结果未知，不应自动重试。普通业务错误回复发送成功时仍保持连接。
+OnOpen 使用 `Session.Send` 发送 `type=session.connected` 事件。收到 JSON 或 PB 的 `client/setPage` 请求后，`setPage` 在原消息回调中把正文 Decode 到 `wspb.SetPageRequest`，更新端状态，再用 `Session.Reply(ctx, message, "client.state", data)` 返回 `StateReply`。下行统一使用必填的业务字符串 type，不携带 scene/action；响应回显 requestId，事件不携带。未知 scene/action 由 Pixiu 默认回复 `request.error` / `NOT_FOUND`，业务可通过 `Config.OnNotFound` 定制；正文解码错误或 page 不满足 1–128 字节返回 `INVALID_ARGUMENT`，通过 `ReplyError(ctx, message, "request.error", code, text)` 显式下发公开文案，发送成功时状态不变且连接继续使用。错误的外层信封或帧类型由 realtime 关闭连接。业务消息不使用 HTTP 的 code/msg 包装。
+
+活跃请求的 `Reply` 或 `ReplyError` 发送失败时，Pixiu 对队列或预算不足发起关闭 1013，对编码失败或超限发起关闭 1011，并返回原错误。已更新的端状态不回滚；客户端没有收到响应时结果未知，不应自动重试。普通业务错误回复发送成功时仍保持连接。
 
 `OnClose` 使用独立于断连取消的清理 ctx，`Transport.OnCloseTimeout` 在示例中显式设为 5 秒。清理 I/O 应使用回调参数 ctx，不使用已取消的 `Session.Context()`；普通断连、Stop 和 Wait 超时不取消清理，`Server.Cancel` 会取消它。业务必须响应取消，Session/Server 的 Done 仍等待回调实际返回。
 
-`Send` 成功仅代表进入本地有界队列；不表示客户端已收到。Message 只在 OnMessage 回调期间有效，不能保存后异步 Reply。示例建连事件只发送到当前 Session，没有消息总线或分布式推送。
+`Send` 成功仅代表进入本地有界队列；不表示客户端已收到。Message 只在业务 Handler 执行期间有效，不能保存后异步 Reply。示例建连事件只发送到当前 Session，没有消息总线或分布式推送。
 
 先按前文准备现有基础设施、配置与 OpenAPI，再启动应用：
 

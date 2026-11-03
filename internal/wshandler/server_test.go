@@ -25,7 +25,6 @@ func TestReplyFailureClosesConnection(t *testing.T) {
 				t.Run(subprotocol+"/"+action+"/"+limit, func(t *testing.T) {
 					transport := websocketx.Config{}
 					wantCode := websocket.CloseTryAgainLater
-					wantErr := websocketx.ErrBudgetExceeded
 					switch limit {
 					case "budget":
 						budget, err := websocketx.NewBudget(websocketx.BudgetConfig{SendBytes: 1})
@@ -35,13 +34,10 @@ func TestReplyFailureClosesConnection(t *testing.T) {
 						transport.Budget = budget
 					case "queue":
 						transport.SendQueueBytes = 1
-						wantErr = websocketx.ErrQueueFull
 					case "size":
 						transport.MaxSendBytes = 1
 						wantCode = websocket.CloseInternalServerErr
-						wantErr = websocketx.ErrMessageTooLarge
 					}
-					handled := make(chan error, 1)
 					closed := make(chan StateSnapshot, 1)
 					server, err := realtime.NewServer(realtime.Config{
 						Transport:    transport,
@@ -49,11 +45,7 @@ func TestReplyFailureClosesConnection(t *testing.T) {
 						NewState: func(realtime.ClientInfo) any {
 							return &ClientState{}
 						},
-						OnMessage: func(ctx context.Context, session *realtime.Session, message *realtime.Message) error {
-							err := onMessage(ctx, session, message)
-							handled <- err
-							return err
-						},
+						RegisterHandlers: Register,
 						OnClose: func(_ context.Context, session *realtime.Session) {
 							state := session.State().(*ClientState)
 							state.mu.Lock()
@@ -121,14 +113,6 @@ func TestReplyFailureClosesConnection(t *testing.T) {
 					}
 					if err := client.WriteMessage(frameType, frame); err != nil {
 						t.Fatal(err)
-					}
-					select {
-					case err := <-handled:
-						if !errors.Is(err, wantErr) {
-							t.Fatalf("发送错误丢失: %v，期望 %v", err, wantErr)
-						}
-					case <-time.After(time.Second):
-						t.Fatal("请求未处理")
 					}
 					_ = client.SetReadDeadline(time.Now().Add(time.Second))
 					if _, _, err := client.ReadMessage(); !websocket.IsCloseError(err, wantCode) {

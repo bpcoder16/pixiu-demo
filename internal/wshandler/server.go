@@ -2,48 +2,20 @@ package wshandler
 
 import (
 	"context"
-	"errors"
 	"net/http"
-	"sync"
 	"time"
 
 	"pixiu-demo/internal/wspb"
 
 	"github.com/bpcoder16/pixiu/biz/realtime"
 	"github.com/bpcoder16/pixiu/biz/realtime/protocol"
-	"github.com/bpcoder16/pixiu/infra/websocketx"
 	"github.com/bpcoder16/pixiu/logit"
-	"github.com/gorilla/websocket"
 )
 
 // TerminalInfo 放在 ClientInfo.Value 中，连接建立后保持不变。
 type TerminalInfo struct {
 	Platform   string
 	AppVersion string
-}
-
-// ClientState 由 NewState 为每条连接分别创建；重连不会继承旧状态。
-// 同连接消息串行处理；锁让业务在其他 goroutine 访问状态时仍有明确的同步边界。
-type ClientState struct {
-	mu       sync.Mutex
-	page     string
-	revision uint64
-}
-
-type StateSnapshot struct {
-	Page     string
-	Revision uint64
-}
-
-func (s *ClientState) SetPage(page string) StateSnapshot {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.page = page
-	s.revision++
-	return StateSnapshot{
-		Page:     s.page,
-		Revision: s.revision,
-	}
 }
 
 // NewServer 仅构造服务，由 bootstrap 统一运行及关闭。
@@ -61,9 +33,9 @@ func NewServer() (*realtime.Server, error) {
 		NewState: func(realtime.ClientInfo) any {
 			return &ClientState{}
 		},
-		OnOpen:    onOpen,
-		OnMessage: onMessage,
-		OnClose:   onClose,
+		OnOpen:           onOpen,
+		RegisterHandlers: Register,
+		OnClose:          onClose,
 	})
 }
 
@@ -89,40 +61,6 @@ func onOpen(ctx context.Context, session *realtime.Session) error {
 			ConnectionId: session.ID(),
 		},
 		ExpiresAt: time.Now().Add(10 * time.Second),
-	})
-}
-
-func onMessage(ctx context.Context, session *realtime.Session, message *realtime.Message) (err error) {
-	// Reply/ReplyError 失败后不能再依赖发送队列告知客户端；关闭连接并保留原错误供观察。
-	// 状态可能已经更新，既不回滚也不自动重试，由客户端将未收到响应的请求视为结果未知。
-	defer func() {
-		if err == nil {
-			return
-		}
-		code, reason := websocket.CloseInternalServerErr, "response failed"
-		if errors.Is(err, websocketx.ErrQueueFull) || errors.Is(err, websocketx.ErrBudgetExceeded) {
-			code, reason = websocket.CloseTryAgainLater, "server busy"
-		}
-		_, _ = session.Close(code, reason)
-	}()
-	// 首期只有一个业务入口；Route 注册能力留待后续实现。
-	if message.Scene() != "client" || message.Action() != "setPage" {
-		return session.ReplyError(ctx, message, "request.error", "NOT_FOUND", "不支持的消息")
-	}
-	var request wspb.SetPageRequest
-	if err := message.Decode(&request); err != nil {
-		return session.ReplyError(ctx, message, "request.error", "INVALID_ARGUMENT", "请求正文格式错误")
-	}
-	if request.GetPage() == "" || len(request.GetPage()) > 128 {
-		return session.ReplyError(ctx, message, "request.error", "INVALID_ARGUMENT", "page 长度必须为 1–128 字节")
-	}
-	state := session.State().(*ClientState).SetPage(request.GetPage())
-	info := session.Info()
-	return session.Reply(ctx, message, "client.state", &wspb.StateReply{
-		UserId:   info.UserID,
-		DeviceId: info.DeviceID,
-		Page:     state.Page,
-		Revision: state.Revision,
 	})
 }
 
