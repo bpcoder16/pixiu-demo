@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bpcoder16/pixiu/biz/realtime"
+	"github.com/bpcoder16/pixiu/biz/realtime/protocol"
 	"github.com/bpcoder16/pixiu/infra/env"
 	"github.com/bpcoder16/pixiu/infra/ginx"
 	"github.com/bpcoder16/pixiu/logit"
@@ -197,10 +198,10 @@ func TestNATSHTTPWebSocketAndCronStartup(t *testing.T) {
 			t.Fatal(err)
 		}
 		var welcome struct {
-			Kind   string `json:"kind"`
-			Action string `json:"action"`
+			Kind protocol.Kind `json:"kind"`
+			Type string        `json:"type"`
 		}
-		if err := connection.ReadJSON(&welcome); err != nil || welcome.Kind != "event" || welcome.Action != "connected" {
+		if err := connection.ReadJSON(&welcome); err != nil || welcome.Kind != protocol.Kind_EVENT || welcome.Type != "session.connected" {
 			t.Fatalf("Start 未接通 WebSocket: %+v, err=%v", welcome, err)
 		}
 		select {

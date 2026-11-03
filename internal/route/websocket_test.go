@@ -63,7 +63,7 @@ func TestWebSocketRoundTrip(t *testing.T) {
 			second := dialDemoWS(t, address, subprotocol)
 			var connected wspb.Connected
 			event := first.read(&connected)
-			if event.kind != "event" || event.scene != "session" || event.action != "connected" || connected.GetConnectionId() == "" {
+			if event.kind != protocol.Kind_EVENT || event.messageType != "session.connected" || connected.GetConnectionId() == "" {
 				t.Fatalf("错误的连接事件: %+v, %v", event, &connected)
 			}
 			firstID := connected.GetConnectionId()
@@ -77,7 +77,7 @@ func TestWebSocketRoundTrip(t *testing.T) {
 				client.send("client", "setPage", &wspb.SetPageRequest{Page: page})
 				var reply wspb.StateReply
 				message := client.read(&reply)
-				if message.kind != "response" || message.requestID != "r1" || message.scene != "client" || message.action != "setPage" || message.errorCode != "" {
+				if message.kind != protocol.Kind_RESPONSE || message.requestID != "r1" || message.messageType != "client.state" || message.errorCode != "" {
 					t.Fatalf("错误的响应信封: %+v", message)
 				}
 				if reply.GetUserId() != "demo-user" || reply.GetDeviceId() != "demo-device" || reply.GetPage() != page || reply.GetRevision() != revision {
@@ -96,7 +96,7 @@ func TestWebSocketRoundTrip(t *testing.T) {
 			} {
 				first.send("client", tc.action, &wspb.SetPageRequest{Page: tc.page})
 				message := first.read(nil)
-				if message.errorCode != tc.code || message.kind != "response" || message.requestID != "r1" {
+				if message.errorCode != tc.code || message.kind != protocol.Kind_RESPONSE || message.requestID != "r1" || message.messageType != "request.error" {
 					t.Fatalf("业务错误回复: %+v", message)
 				}
 			}
@@ -106,7 +106,7 @@ func TestWebSocketRoundTrip(t *testing.T) {
 				badBody = []byte{0xff}
 			}
 			first.sendBody("client", "setPage", badBody)
-			if message := first.read(nil); message.errorCode != "INVALID_ARGUMENT" {
+			if message := first.read(nil); message.errorCode != "INVALID_ARGUMENT" || message.messageType != "request.error" {
 				t.Fatalf("业务解码失败未回复: %+v", message)
 			}
 			assertPage(first, "settings", 2)
@@ -122,7 +122,10 @@ type demoWSClient struct {
 }
 
 type demoWSMessage struct {
-	kind, requestID, scene, action, errorCode string
+	kind        protocol.Kind
+	requestID   string
+	messageType string
+	errorCode   string
 }
 
 func dialDemoWS(t *testing.T, address, subprotocol string) *demoWSClient {
@@ -177,8 +180,11 @@ func (c *demoWSClient) sendBody(scene, action string, body []byte) {
 		})
 	} else {
 		frame, err = json.Marshal(map[string]any{
-			"kind": "request", "requestId": "r1", "scene": scene,
-			"action": action, "data": json.RawMessage(body),
+			"kind":      protocol.Kind_REQUEST,
+			"requestId": "r1",
+			"scene":     scene,
+			"action":    action,
+			"data":      json.RawMessage(body),
 		})
 	}
 	if err != nil {
@@ -211,10 +217,14 @@ func (c *demoWSClient) read(dst proto.Message) demoWSMessage {
 		if err := proto.Unmarshal(frame, &envelope); err != nil {
 			c.t.Fatal(err)
 		}
+		if envelope.GetScene() != "" || envelope.GetAction() != "" {
+			c.t.Fatal("下行消息不应携带路由字段")
+		}
 		result = demoWSMessage{
-			kind:      strings.ToLower(envelope.GetKind().String()),
-			requestID: envelope.GetRequestId(), scene: envelope.GetScene(), action: envelope.GetAction(),
-			errorCode: envelope.GetError().GetCode(),
+			kind:        envelope.GetKind(),
+			requestID:   envelope.GetRequestId(),
+			messageType: envelope.GetType(),
+			errorCode:   envelope.GetError().GetCode(),
 		}
 		body = envelope.GetData()
 		if dst != nil {
@@ -225,10 +235,11 @@ func (c *demoWSClient) read(dst proto.Message) demoWSMessage {
 			c.t.Fatal("JSON 必须使用 Text 帧")
 		}
 		var envelope struct {
-			Kind      string          `json:"kind"`
+			Kind      protocol.Kind   `json:"kind"`
 			RequestID string          `json:"requestId"`
-			Scene     string          `json:"scene"`
-			Action    string          `json:"action"`
+			Type      string          `json:"type"`
+			Scene     json.RawMessage `json:"scene"`
+			Action    json.RawMessage `json:"action"`
 			Data      json.RawMessage `json:"data"`
 			Error     *struct {
 				Code string `json:"code"`
@@ -237,8 +248,13 @@ func (c *demoWSClient) read(dst proto.Message) demoWSMessage {
 		if err := json.Unmarshal(frame, &envelope); err != nil {
 			c.t.Fatal(err)
 		}
+		if envelope.Scene != nil || envelope.Action != nil {
+			c.t.Fatal("下行消息不应携带路由字段")
+		}
 		result = demoWSMessage{
-			kind: envelope.Kind, requestID: envelope.RequestID, scene: envelope.Scene, action: envelope.Action,
+			kind:        envelope.Kind,
+			requestID:   envelope.RequestID,
+			messageType: envelope.Type,
 		}
 		if envelope.Error != nil {
 			result.errorCode = envelope.Error.Code

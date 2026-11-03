@@ -101,7 +101,7 @@ func TestReplyFailureClosesConnection(t *testing.T) {
 					}
 					t.Cleanup(func() { _ = client.Close() })
 					frameType := websocket.TextMessage
-					frame := []byte(`{"kind":"request","requestId":"r1","scene":"client","action":"` + action + `","data":{"page":"home"}}`)
+					frame := []byte(`{"kind":1,"requestId":"r1","scene":"client","action":"` + action + `","data":{"page":"home"}}`)
 					if subprotocol == realtime.SubprotocolProtobuf {
 						frameType = websocket.BinaryMessage
 						body, err := proto.Marshal(&wspb.SetPageRequest{Page: "home"})

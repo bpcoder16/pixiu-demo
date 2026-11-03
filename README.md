@@ -73,7 +73,6 @@ go run .
 | [`bootstrap/start.go`](bootstrap/start.go) | 并列注册 `NewWebSocketService("app", wshandler.NewServer)` 与 `NewGinHTTPService` |
 | [`internal/wshandler/server.go`](internal/wshandler/server.go) | 模拟身份、自定义端状态、建连事件及单一业务消息处理 |
 | [`internal/wspb/client.proto`](internal/wspb/client.proto) | JSON/PB 共用的业务定义及已生成的 Go 类型 |
-| [`cmd/wsreview/main.go`](cmd/wsreview/main.go) | JSON/PB 客户端，默认连接 `ws://127.0.0.1:8889/ws/app` |
 
 WebSocket 端口只提供升级入口和就绪探针，两者仅允许 GET，其他方法含 HEAD 返回 405 与 `Allow: GET`，其他路径返回 404，不经过 Gin。Gin 端口保留 API、App/Admin 文档及 404/405 语义；`NewGinHTTPService` 负责设置模式及读取 `gin.yaml`、`http.yaml`，test/debug 仍要求文档，release 仍关闭文档。
 
@@ -104,9 +103,9 @@ func() (apprun.Service, error) {
 cp -n conf.example/websocket.app.yaml conf/
 ```
 
-**端身份与状态：**`demoAuthenticate` 明确使用模拟身份 `demo-user` / `demo-device` / `demo-tenant`，所有连接相同，未验证登录凭据。实际接入时在此验证凭据后填写 `ClientInfo`，不要直接信任客户端声称的 userId。`ClientInfo.Value` 保存业务类型 `TerminalInfo{Platform, AppVersion}`，是不可变身份信息；`NewState` 每次创建独立的 `*ClientState`，通过 `Session.State()` 获取，保存可变的 page 和 revision。状态更新在锁内完成并返回值快照；连接断开后不持久化，重连或新连接从 revision 0 重新开始，不以设备 ID 共享状态。
+**端身份与状态：**`demoAuthenticate` 明确使用模拟身份 `demo-user` / `demo-device`，所有连接相同，未验证登录凭据。实际接入时在此验证凭据后填写 `ClientInfo`，不要直接信任客户端声称的 userId。`ClientInfo.Value` 保存业务类型 `TerminalInfo{Platform, AppVersion}`，是不可变身份信息；`NewState` 每次创建独立的 `*ClientState`，通过 `Session.State()` 获取，保存可变的 page 和 revision。状态更新在锁内完成并返回值快照；连接断开后不持久化，重连或新连接从 revision 0 重新开始，不以设备 ID 共享状态。
 
-**收发流程：**OnOpen 使用 `Session.Send` 主动发送 `session/connected` 事件；OnMessage 直接判断 `client/setPage`，将正文 Decode 到独立的 `wspb.SetPageRequest` 对象，更新端状态，再用 `Session.Reply` 返回 `StateReply`。不支持的 scene/action 返回 `NOT_FOUND`；正文解码错误或 page 不满足 1–128 字节返回 `INVALID_ARGUMENT`，通过 `ReplyError` 显式下发公开文案，发送成功时状态不变且连接继续使用。错误的外层信封或帧类型由 realtime 关闭连接。业务消息不使用 HTTP 的 code/msg 包装。
+**收发流程：**OnOpen 使用 `Session.Send` 主动发送 `type=session.connected` 事件；OnMessage 直接判断上行路由 `client/setPage`，将正文 Decode 到独立的 `wspb.SetPageRequest` 对象，更新端状态，再用 `Session.Reply(ctx, message, "client.state", data)` 返回 `StateReply`。下行统一使用必填的业务字符串 type，不携带 scene/action；响应回显 requestId，事件不携带。不支持的 scene/action 返回 `NOT_FOUND`；正文解码错误或 page 不满足 1–128 字节返回 `INVALID_ARGUMENT`，通过 `ReplyError(ctx, message, "request.error", code, text)` 显式下发公开文案，发送成功时状态不变且连接继续使用。错误的外层信封或帧类型由 realtime 关闭连接。业务消息不使用 HTTP 的 code/msg 包装。
 
 `Reply`/`ReplyError` 发送失败时，队列或共享预算不足关闭连接并尽力发送关闭码 1013，其他发送失败使用 1011；返回原错误供组件观察，不再尝试经同一队列回复错误。已更新的端状态不回滚；客户端没有收到响应时结果未知，不应自动重试。普通业务错误回复发送成功时仍保持连接。
 
@@ -123,33 +122,24 @@ go run .
 JSON 请求：
 
 ```json
-{"kind":"request","requestId":"r1","scene":"client","action":"setPage","data":{"page":"home"}}
+{"kind":1,"requestId":"r1","scene":"client","action":"setPage","data":{"page":"home"}}
 ```
 
 服务器先发送建连事件，再回复请求：
 
 ```json
-{"kind":"event","scene":"session","action":"connected","data":{"connectionId":"连接ID"}}
-{"kind":"response","requestId":"r1","scene":"client","action":"setPage","data":{"userId":"demo-user","deviceId":"demo-device","page":"home","revision":"1"}}
+{"kind":3,"type":"session.connected","data":{"connectionId":"连接ID"}}
+{"kind":2,"requestId":"r1","type":"client.state","data":{"userId":"demo-user","deviceId":"demo-device","page":"home","revision":"1"}}
 ```
 
-`revision` 是 proto 的 uint64，因此 ProtoJSON 使用十进制字符串；JSON data 直接嵌入业务对象，不是 base64。错误响应包含 `error: {"code":"INVALID_ARGUMENT","message":"..."}`，没有 data。
+kind 在 JSON/PB 中共用数字枚举：1 为请求、2 为响应、3 为事件。type 为 1–128 字节，允许 ASCII 字母、数字、点、下划线、短横线，由业务约定，不使用 protobuf 类型名。`revision` 是 proto 的 uint64，因此 ProtoJSON 使用十进制字符串；JSON data 直接嵌入业务对象，不是 base64。错误响应使用 `type=request.error` 并包含 `error: {"code":"INVALID_ARGUMENT","message":"..."}`，没有 data。
 
-使用命令行客户端验证两种协议，每次运行新建一条连接：
+PB 使用 `pixiu.realtime.v1.protobuf` 子协议及 Binary 帧：先 `proto.Marshal(SetPageRequest)`，填入 Pixiu `protocol.Envelope_Data`，再编码信封；接收时先解信封，再根据 Type（字段号 7）选择 `Connected` 或 `StateReply` 解码。
 
-```bash
-go run ./cmd/wsreview -protocol=json -page=home
-go run ./cmd/wsreview -protocol=pb -page=settings
-# 自定义地址或验证业务错误：
-go run ./cmd/wsreview -protocol=pb -url=ws://127.0.0.1:8889/ws/app -page=''
-```
-
-成功输出类似 `connected: <连接ID> (pb)` 和 `user=demo-user device=demo-device page=settings revision=1`；业务错误或网络错误以非零状态退出。PB 使用 `pixiu.realtime.v1.protobuf` 子协议及 Binary 帧：先 `proto.Marshal(SetPageRequest)`，填入 Pixiu `protocol.Envelope_Data`，再编码信封；接收时先解信封，再根据事件/响应选择 `Connected` 或 `StateReply` 解码。客户端有 5 秒握手、写入与等待响应期限。收到合法业务响应（含业务错误响应）后发送 1000 Close，写入关闭帧和等待对端关闭共用最多 1 秒；随后关闭底层连接。关闭握手失败返回错误，已有业务错误会一并保留。
-
-普通构建使用随源码提供的生成物，不需要 protoc。修改业务 proto 后，在 PATH 准备 protoc 32.1 和 protoc-gen-go v1.36.10：
+普通构建使用随源码提供的生成物，不需要 protoc。修改业务 proto 后，在 PATH 准备与 Pixiu 信封协议一致的 protoc 36.2 和 protoc-gen-go v1.36.12，安装及 PATH 配置步骤见 [`internal/wspb/generate.sh`](internal/wspb/generate.sh)：
 
 ```bash
-go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
 go generate ./internal/wspb
 ```
 
@@ -159,7 +149,6 @@ go generate ./internal/wspb
 
 ```bash
 go test -v ./internal/route -run '^TestWebSocketRoundTrip$'
-go test -v ./cmd/wsreview -run '^TestReviewClient$'
 go test -v ./internal/wshandler -run '^TestReplyFailureClosesConnection$'
 go test -v ./bootstrap -run '^TestNATSHTTPWebSocketAndCronStartup$'
 go test ./...

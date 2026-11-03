@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package pixiudemo.ws.v1;
+
+option go_package = "pixiu-demo/internal/wspb";
+
+// 同一份业务定义同时用于 ProtoJSON 和二进制 PB。
+message SetPageRequest {
+  string page = 1;
+}
+
+message StateReply {
+  string user_id = 1;
+  string device_id = 2;
+  string page = 3;
+  uint64 revision = 4;
+}
+
+message Connected {
+  string connection_id = 1;
+}
