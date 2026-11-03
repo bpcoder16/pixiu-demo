@@ -21,7 +21,7 @@ import (
 
 // 独立 HTTP 入口验证两种编码共用业务定义、错误不修改状态、连接间状态独立；bootstrap 测试覆盖实际端口装配。
 func TestWebSocketRoundTrip(t *testing.T) {
-	server, err := wshandler.NewServer()
+	server, err := wshandler.NewAppServer()
 	if err != nil {
 		t.Fatal(err)
 	}

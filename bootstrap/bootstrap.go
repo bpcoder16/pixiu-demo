@@ -10,6 +10,8 @@ import (
 	"pixiu-demo/internal/infra/mysql"
 	"pixiu-demo/internal/infra/nats"
 	"pixiu-demo/internal/infra/redis"
+	"pixiu-demo/internal/infra/websocket"
+	"pixiu-demo/internal/wshandler"
 
 	"github.com/bpcoder16/pixiu/biz/appconfig"
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
@@ -18,6 +20,7 @@ import (
 
 // MustInit 声明 MySQL、Redis、Elasticsearch、阿里云 OSS、阿里云 ES 和 NATS 实例，再执行通用和项目初始化。
 // MustBaseInit 先应用时区，再按日志、OSS、阿里云 ES、MySQL、Redis、Elasticsearch、NATS 的顺序初始化。
+// NATS 就绪后构造并登记 WebSocket 命名实例，监听和关闭由 Start 中的 Service 管理。
 // 随后执行迁移；NATS 消费者由 Start 构造并管理，示例消息由测试接口发布。
 // 成功返回后再创建和保存模块 Logger；不要在包级变量或 init 中提前缓存。
 // 两层共用由 main 创建和关闭的资源栈，初始化失败时由入口 defer 收尾并传播 panic。
@@ -28,6 +31,7 @@ func MustInit(config *appconfig.AppConfig, resources *lifecycle.Stack) {
 	bootstrap.MustRegisterAliyunOSS(aliyunoss.DemoName, true)
 	bootstrap.MustRegisterAliyunES(aliyunes.DemoName, true)
 	bootstrap.MustRegisterNATS(nats.DemoName, true)
+	bootstrap.MustRegisterWebSocket(websocket.AppName, wshandler.NewAppServer)
 
 	bootstrap.MustBaseInit(config, resources)
 

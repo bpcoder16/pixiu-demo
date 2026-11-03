@@ -38,19 +38,19 @@ func TestReplyFailureClosesConnection(t *testing.T) {
 						transport.MaxSendBytes = 1
 						wantCode = websocket.CloseInternalServerErr
 					}
-					closed := make(chan StateSnapshot, 1)
+					closed := make(chan AppStateSnapshot, 1)
 					server, err := realtime.NewServer(realtime.Config{
 						Transport:    transport,
-						Authenticate: demoAuthenticate,
+						Authenticate: appAuthenticate,
 						NewState: func(realtime.ClientInfo) any {
-							return &ClientState{}
+							return &AppClientState{}
 						},
-						RegisterHandlers: Register,
+						RegisterHandlers: RegisterApp,
 						OnClose: func(_ context.Context, session *realtime.Session) {
-							state := session.State().(*ClientState)
+							state := session.State().(*AppClientState)
 							state.mu.Lock()
 							defer state.mu.Unlock()
-							closed <- StateSnapshot{
+							closed <- AppStateSnapshot{
 								Page:     state.page,
 								Revision: state.revision,
 							}
@@ -120,10 +120,10 @@ func TestReplyFailureClosesConnection(t *testing.T) {
 					}
 					select {
 					case state := <-closed:
-						want := StateSnapshot{}
+						want := AppStateSnapshot{}
 						if action == "setPage" {
 							// 发送失败不回滚已完成的业务，也不能自动重放请求。
-							want = StateSnapshot{Page: "home", Revision: 1}
+							want = AppStateSnapshot{Page: "home", Revision: 1}
 						}
 						if state != want {
 							t.Fatalf("关闭时业务状态 = %+v，期望 %+v", state, want)

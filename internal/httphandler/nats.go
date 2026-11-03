@@ -10,7 +10,7 @@ import (
 // AppNATSPublish 通过默认 NATS 客户端发布一组固定示例消息。
 //
 // @Summary      发布 NATS 示例消息
-// @Description  无需请求参数，Service 每次生成 UUID 批次前缀，向 Core 广播、Queue 及 JetStream 同步、异步各发布一条。等待两条 JetStream PubAck，不等待消费完成；重复调用会重新发布，Core 不去重。失败可能已有部分消息发出，不回滚或自动重试
+// @Description  无需请求参数，Service 每次生成 UUID 批次前缀，向 Core 广播、Queue 及 JetStream 同步、异步各发布一条，再通过 Core 给 demo-user 推送 client.state。等待两条 JetStream PubAck，不等待消费完成；重复调用会重新发布，Core 不去重。失败可能已有部分消息发出，不回滚或自动重试
 // @x-module-app true
 // @Tags         NATS
 // @Produce      json

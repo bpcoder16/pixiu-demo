@@ -41,6 +41,9 @@ coreConsumers:  # 可省略或设为 []。
   - name: "demo-broadcast"
     subject: "pixiu.demo.broadcast"
     handler: "HandleBroadcast"  # 须由 CoreHandlerRegistry 登记，名称与 registry.go 登记的函数名完全一致。
+  - name: "app-ws-push"
+    subject: "pixiu.demo.ws.app.push"
+    handler: "HandleAppPush"  # 每个 App 节点都须消费一份，省略 queue。
   - name: "demo-queue"
     subject: "pixiu.demo.queue"
     queue: "pixiu-demo-workers"  # 省略或为空时广播。

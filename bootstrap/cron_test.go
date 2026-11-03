@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"pixiu-demo/internal/cronhandler"
+	"pixiu-demo/internal/infra/websocket"
+	"pixiu-demo/internal/wshandler"
 
 	pixiubootstrap "github.com/bpcoder16/pixiu/biz/bootstrap"
+	"github.com/bpcoder16/pixiu/biz/realtime"
 	"github.com/bpcoder16/pixiu/infra/env"
 )
 
@@ -97,6 +100,14 @@ func initMixedStartConfig(t *testing.T) string {
 	writeStartConfig(t, "gin.yaml", "disableAccessLog: true\n")
 	writeStartConfig(t, "http.yaml", fmt.Sprintf("addr: %q\n", addr))
 	writeStartConfig(t, "websocket.app.yaml", "addr: 127.0.0.1:0\npath: /ws/app\n")
+	// NATS 测试二进制已有后台采样，不在此修改进程时区。通过公共注册入口准备同一实例。
+	app, err := wshandler.NewAppServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := realtime.Register(websocket.AppName, app); err != nil {
+		t.Fatal(err)
+	}
 	return addr
 }
 

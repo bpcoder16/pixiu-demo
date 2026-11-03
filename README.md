@@ -51,7 +51,7 @@ cp -n conf.example/*.yaml conf/
 
 基础设施实例名统一为 `demo`，由 `bootstrap.MustInit` 注册；配置文件中无需再次指定实例名或默认标识。启动会初始化全部六类基础设施，即使只访问 Ping，也需完成初始化。阿里云 OSS 和阿里云 ES 初始化只校验配置并构造客户端，不联网验活；实际访问时再验证凭据、权限和资源可用性。
 
-实例声明完成后，`MustBaseInit` 先应用环境时区，再依次初始化日志 → 阿里云 OSS → 阿里云 ES → MySQL → Redis → Elasticsearch → NATS。随后 `MustInit` 执行 MySQL 迁移，成功返回后再由 `Start` 构造并启动 NATS 消费、WebSocket、HTTP、Cron；启动不发布示例消息。跨组件的声明顺序不改变上述初始化顺序；同一组件按声明顺序初始化、逆序关闭，依赖实例须先声明。
+实例声明完成后，`MustBaseInit` 先应用环境时区，再依次初始化日志 → 阿里云 OSS → 阿里云 ES → MySQL → Redis → Elasticsearch → NATS。随后构造 WebSocket 命名实例，`MustInit` 再执行 MySQL 迁移，成功返回后再由 `Start` 构造并启动 NATS 消费、WebSocket、HTTP、Cron；启动不发布示例消息。跨组件的声明顺序不改变上述初始化顺序；同一组件按声明顺序初始化、逆序关闭，依赖实例须先声明。
 
 模板使用 `debug` 模式，启动前须生成接口文档：
 
@@ -70,24 +70,25 @@ go run .
 | --- | --- |
 | `GET :8889/ws/app` | WebSocket Upgrade，通过子协议协商 JSON 或 PB |
 | `GET :8889/ready/ws` | 此 WebSocket 实例就绪时返回 204，否则返回 503；不代表全应用就绪 |
-| [`bootstrap/start.go`](bootstrap/start.go) | 并列注册 `NewWebSocketService("app", wshandler.NewServer)` 与 `NewGinHTTPService` |
-| [`internal/wshandler/server.go`](internal/wshandler/server.go) | 装配服务、模拟认证、建连和关闭回调 |
-| [`internal/wshandler/register.go`](internal/wshandler/register.go) | WebSocket 消息注册清单 `wshandler.Register` |
+| [`bootstrap/start.go`](bootstrap/start.go) | 并列注册 `NewWebSocketService(websocket.AppName)` 与 `NewGinHTTPService` |
+| [`internal/wshandler/app_server.go`](internal/wshandler/app_server.go) | 装配服务、模拟认证、建连和关闭回调 |
+| [`internal/wshandler/app_register.go`](internal/wshandler/app_register.go) | WebSocket 消息注册清单 `wshandler.RegisterApp` |
 | [`internal/wshandler/client.go`](internal/wshandler/client.go) | client 场景的端状态与 setPage 处理函数 |
 | [`internal/wspb/client.proto`](internal/wspb/client.proto) | JSON/PB 共用的业务定义及已生成的 Go 类型 |
 
 WebSocket 端口只提供升级入口和就绪探针，两者仅允许 GET，其他方法含 HEAD 返回 405 与 `Allow: GET`，其他路径返回 404，不经过 Gin。Gin 端口保留 API、App/Admin 文档及 404/405 语义；`NewGinHTTPService` 负责设置模式及读取 `gin.yaml`、`http.yaml`，test/debug 仍要求文档，release 仍关闭文档。
 
-`NewWebSocketService` 在构造阶段调用工厂创建全新 Server，不监听端口；构造成功后拥有该 Server，业务不得再单独运行或登记内部 Server。管理器中只有一个 `websocket:app` 服务，同时控制 HTTP 监听与所有升级连接。Run 启动两部分，客户端以此端口 `/ready/ws` 的 204 确认就绪；Stop 封闭接纳并启动两侧排空，Wait 共享外层期限等待 HTTP、会话回调、OnClose 及内部 Run 实际结束，Cancel 同时通知两部分。监听失败会触发统一停机，SIGINT/SIGTERM 后最后仍由 main 回收资源和日志。
+`MustInit` 通过 `MustRegisterWebSocket(websocket.AppName, wshandler.NewAppServer)` 声明 App 端，在共享客户端就绪后构造并登记，构造不监听。业务通过 `internal/infra/websocket.App()` 获取同一个实例，未知名称或初始化前获取均 panic。`NewWebSocketService(websocket.AppName)` 只允许接管该实例一次，统一拥有运行和关闭职责。资源栈不会提前关闭 WebSocket，停止后命名入口仍返回原对象，推送返回关闭错误。管理器中只有一个 `websocket:app` 服务，同时控制 HTTP 监听与所有升级连接。Run 启动两部分，客户端以此端口 `/ready/ws` 的 204 确认就绪；Stop 封闭接纳并启动两侧排空，Wait 共享外层期限等待 HTTP、会话回调、OnClose 及内部 Run 实际结束，Cancel 同时通知两部分。监听失败会触发统一停机，SIGINT/SIGTERM 后最后仍由 main 回收资源和日志。
 
 多端可以继续在 `bootstrap.Start` 中增加工厂。以下为扩展示例，demo 当前只启用 `app`；为其他端提供自己的业务工厂，或复用每次创建全新 Server 的工厂：
 
 ```go
+// MustBaseInit 前分别声明 MustRegisterWebSocket("web", webhandler.NewServer) 和 admin。
 func() (apprun.Service, error) {
-    return bootstrap.NewWebSocketService("web", webhandler.NewServer)
+    return bootstrap.NewWebSocketService("web")
 },
 func() (apprun.Service, error) {
-    return bootstrap.NewWebSocketService("admin", adminhandler.NewServer)
+    return bootstrap.NewWebSocketService("admin")
 },
 ```
 
@@ -107,9 +108,9 @@ func() (apprun.Service, error) {
 cp -n conf.example/websocket.app.yaml conf/
 ```
 
-**端身份与状态：**`demoAuthenticate` 明确使用模拟身份 `demo-user` / `demo-device`，所有连接相同，未验证登录凭据。实际接入时在此验证凭据后填写 `ClientInfo`，不要直接信任客户端声称的 userId。`ClientInfo.Value` 保存业务类型 `TerminalInfo{Platform, AppVersion}`，是不可变身份信息；`NewState` 每次创建独立的 `*ClientState`，通过 `Session.State()` 获取，保存可变的 page 和 revision。状态更新在锁内完成并返回值快照；连接断开后不持久化，重连或新连接从 revision 0 重新开始，不以设备 ID 共享状态。
+**端身份与状态：**`appAuthenticate` 明确使用模拟身份 `demo-user` / `demo-device`，所有连接相同，未验证登录凭据。实际接入时在此验证凭据后填写 `ClientInfo`，不要直接信任客户端声称的 userId。`ClientInfo.Value` 保存业务类型 `AppTerminalInfo{Platform, AppVersion}`，是不可变身份信息；`NewState` 每次创建独立的 `*AppClientState`，通过 `Session.State()` 获取，保存可变的 page 和 revision。状态更新在锁内完成并返回值快照；连接断开后不持久化，重连或新连接从 revision 0 重新开始，不以设备 ID 共享状态。
 
-**上行路由与收发**　服务工厂配置 `RegisterHandlers: Register`。Pixiu 在构造时调用 `wshandler.Register`，封闭注册后按 scene/action 分发。新增动作时，在 `internal/wshandler/` 对应场景文件编写 Handler，并在 `register.go` 中调用 `r.Handle(scene, action, handler)`。有多条注册时逐条检查并返回错误，非法或重复的声明会阻止服务启动。
+**上行路由与收发**　服务工厂配置 `RegisterHandlers: RegisterApp`。Pixiu 在构造时调用 `wshandler.RegisterApp`，封闭注册后按 scene/action 分发。新增动作时，在 `internal/wshandler/` 对应场景文件编写 Handler，并在 `app_register.go` 中调用 `r.Handle(scene, action, handler)`。有多条注册时逐条检查并返回错误，非法或重复的声明会阻止服务启动。
 
 OnOpen 使用 `Session.Send` 发送 `type=session.connected` 事件。收到 JSON 或 PB 的 `client/setPage` 请求后，`setPage` 在原消息回调中把正文 Decode 到 `wspb.SetPageRequest`，更新端状态，再用 `Session.Reply(ctx, message, "client.state", data)` 返回 `StateReply`。下行统一使用必填的业务字符串 type，不携带 scene/action；响应回显 requestId，事件不携带。未知 scene/action 由 Pixiu 默认回复 `request.error` / `NOT_FOUND`，业务可通过 `Config.OnNotFound` 定制；正文解码错误或 page 不满足 1–128 字节返回 `INVALID_ARGUMENT`，通过 `ReplyError(ctx, message, "request.error", code, text)` 显式下发公开文案，发送成功时状态不变且连接继续使用。错误的外层信封或帧类型由 realtime 关闭连接。业务消息不使用 HTTP 的 code/msg 包装。
 
@@ -118,6 +119,29 @@ OnOpen 使用 `Session.Send` 发送 `type=session.connected` 事件。收到 JSO
 `OnClose` 使用独立于断连取消的清理 ctx，`Transport.OnCloseTimeout` 在示例中显式设为 5 秒。清理 I/O 应使用回调参数 ctx，不使用已取消的 `Session.Context()`；普通断连、Stop 和 Wait 超时不取消清理，`Server.Cancel` 会取消它。业务必须响应取消，Session/Server 的 Done 仍等待回调实际返回。
 
 `Send` 成功仅代表进入本地有界队列；不表示客户端已收到。Message 只在业务 Handler 执行期间有效，不能保存后异步 Reply。示例建连事件只发送到当前 Session，没有消息总线或分布式推送。
+
+**按用户、设备或整个端推送**　需要主动通知时，调用方持有对应端的 `*realtime.Server` 或注入其投递方法。三个方法分别是 `Broadcast(ctx, msg)`、`PushToUser(ctx, userID, msg)` 和 `PushToDevice(ctx, deviceID, msg)`。每次只在当前 Server 上查找连接。
+
+线上命令使用 Pixiu 的 `realtime.PushCommand`。最外层的 `kind` 取 `broadcast`、`user` 或 `device`。广播省略 `id`，用户或设备推送必须提供非空白 `id`。`message.type` 是客户端事件名，`message.data` 遵循业务 proto 的 ProtoJSON，也可传 `message.error`，两者只能出现一个。`message.expiresAt` 可选，使用带时区的 RFC3339 绝对时间。完整命令最大 1 MiB。
+
+```json
+{"kind":"user","id":"demo-user","message":{"type":"client.state","data":{"page":"news","revision":"7"}}}
+```
+
+[`PublishAppPush`](internal/natspublisher/publish.go) 将命令编码后发到 Core 主题 `pixiu.demo.ws.app.push`。每个 App 节点使用普通订阅，各自登记绑定本机 WebSocket Server 的 [`HandleAppPush`](internal/natshandler/push.go)。Handler 将 `client.state` 解码为 `wspb.StateReply`，按 `kind/id` 调用本机投递方法。客户端收到 `kind=3` 的 JSON/PB 事件，仅含业务 `type` 和 `data` 或 `error`。
+
+启动 demo 并用 JSON 或 PB 客户端连接 App 端后，调用 `POST /api/app/nats/publish`。该示例会向模拟身份 `demo-user` 发送一次 `client.state`。也可用 NATS CLI 手工发布。以下示例采用配置模板的 `pixiu_demo` 环境前缀，请使用与应用相同的 NATS 连接配置。
+
+```bash
+nats pub pixiu_demo.pixiu.demo.ws.app.push '{"kind":"device","id":"demo-device","message":{"type":"client.state","data":{"page":"news","revision":"7"}}}'
+nats pub pixiu_demo.pixiu.demo.ws.app.push '{"kind":"broadcast","message":{"type":"state.error","error":{"code":"STALE","message":"请刷新"}}}'
+```
+
+跨节点测试在内嵌 NATS 上运行两个 App 节点与一个不同主题的 Admin 节点，运行在三个独立子进程，各自通过相同的命名入口获取本机实例，持有独立连接索引和订阅。混合启动测试使用实际 Start，验证从 HTTP 发布到接收 WebSocket 事件的链路。
+
+```bash
+go test -race ./bootstrap -run 'TestCrossNodePush|TestNATSHTTPWebSocketAndCronStartup' -count=1
+```
 
 先按前文准备现有基础设施、配置与 OpenAPI，再启动应用：
 
@@ -165,7 +189,7 @@ Go 收发与发送失败回归使用临时本地 HTTP/WebSocket 服务；bootstr
 
 ## NATS 消息示例
 
-[`nats-register.demo.yaml`](conf.example/nats-register.demo.yaml) 集中声明 Stream 和消费者；JetStream 消费者嵌套在 `streams[].consumers`，自动继承所属 Stream 的 name，同一 Stream 可配置多个消费者；[`registry.go`](internal/natshandler/registry.go) 与消费 Handler 同包，通过包级 `JetStreamRegistry` 和 `CoreRegistry` 集中声明处理函数，自动使用原始函数名，不获取客户端或启动消费。消费入口在 [`natshandler`](internal/natshandler/handler.go)，业务流程在 [`nats.Service`](internal/service/nats/service.go)，实际发送在 [`natspublisher`](internal/natspublisher/publish.go)。[`bootstrap/start.go`](bootstrap/start.go) 使用注册表装配消费服务；Handler 在处理消息时通过 `NewService()` 获取 Service，复用已初始化的 demo 客户端。服务端须开启 JetStream，例如本地执行 `nats-server -js`，再按前文配置其余基础设施并运行应用；客户端的 `jetStream` 配置不会开启服务端功能。
+[`nats-register.demo.yaml`](conf.example/nats-register.demo.yaml) 集中声明 Stream 和消费者；JetStream 消费者嵌套在 `streams[].consumers`，自动继承所属 Stream 的 name，同一 Stream 可配置多个消费者；[`registry.go`](internal/natshandler/registry.go) 与消费 Handler 同包，通过包级 `JetStreamRegistry` 和 `CoreRegistry` 维护处理函数，`HandleAppPush` 执行时通过统一入口取得本节点 App 实例。消费入口在 [`natshandler`](internal/natshandler/handler.go)，业务流程在 [`nats.Service`](internal/service/nats/service.go)，实际发送在 [`natspublisher`](internal/natspublisher/publish.go)。[`bootstrap/start.go`](bootstrap/start.go) 使用注册表装配消费服务；Handler 在处理消息时通过 `NewService()` 获取 Service，复用已初始化的 demo 客户端。服务端须开启 JetStream，例如本地执行 `nats-server -js`，再按前文配置其余基础设施并运行应用；客户端的 `jetStream` 配置不会开启服务端功能。
 
 `nats.demo.yaml` 配置 `loggerName: "nats"`，`app.yaml` 的 `log.names` 同时声明 http、cron、nats。连接、重连、关闭、异步错误、订阅及消费日志归入 `nats.info.log` / `nats.wf.log` 等命名日志；消费 Handler 和下游调用沿用消息 ctx。HTTP/Cron 中发布 NATS 的调用日志分别跟随 http/cron ctx，异步 PubAck 失败通知使用客户端 nats 路由。省略、空值或名称未注册时回退默认 Logger。
 
@@ -175,6 +199,7 @@ Go 收发与发送失败回归使用临时本地 HTTP/WebSocket 服务；bootstr
 | --- | --- | --- |
 | `pixiu.demo.tasks` | 文件存储、LimitsPolicy Stream `PIXIU_DEMO_TASKS`，Durable Consumer `demo-worker` | 每个 Client 1 个本地 worker；多个应用实例共享该 Durable，竞争处理任务 |
 | `pixiu.demo.broadcast` | Core 订阅，Queue 留空 | 每个在线应用实例都收到一份 |
+| `pixiu.demo.ws.app.push` | Core 普通订阅，绑定 `HandleAppPush` | 每个 App 节点按 kind/id 下发给本机已连接的目标 |
 | `pixiu.demo.queue` | Core 订阅，Queue 为 `pixiu-demo-workers`，每个 Client 创建 4 个同组订阅 | 同组每条消息只交给一个订阅，Handler 可并发执行 |
 
 启动注册：MustInit 初始化共享客户端并执行 MySQL 迁移；Start 的工厂装配消费链路，调用 `bootstrap.NewNATSConsumerService(nats.DemoName, natshandler.JetStreamRegistry, natshandler.CoreRegistry)`，读取配置、绑定 Handler，返回服务和构造错误。Run 使用可由 Stop 取消的注册 context，依次注册 Stream、JetStream 和 Core；Stop 不等待远端注册完成。各注册入口每 Client 只调用一次，注册失败由管理器清理已启动部分，远端资源保留。Start 并发 Run，登记顺序不保证就绪；Handler 依赖须提前准备。
@@ -207,7 +232,7 @@ ACK 与失败重投：`natshandler.HandleTask` 接收 `context.Context` 和 `jet
 - `ackWait` 应覆盖预取等待和处理时间，demo 默认为 60s；组件不自动 `InProgress`。可在 YAML 调整 `ackWait`、`maxDeliver`、`retryDelay`，不开放 `BackOff`。
 - Core handler 接收 `context.Context` 和 `*nats.Msg`、返回 error，分别记录 `DemoNATSCoreBroadcast`、`DemoNATSCoreQueue`；error 或 panic 只记日志、不重投。需要请求响应时显式调用 `msg.Respond`。
 
-同步与异步发布：启动后调用 `POST /api/app/nats/publish`，无需请求参数或请求体，由 `httphandler.AppNATSPublish` 使用请求 context 调用 `nats.Service.PublishExamples`，向 Core 广播、Queue 和 JetStream 同步、异步各发送一条固定示例消息：
+同步与异步发布：启动后调用 `POST /api/app/nats/publish`，无需请求参数或请求体，由 `httphandler.AppNATSPublish` 使用请求 context 调用 `nats.Service.PublishExamples`，向 Core 广播、Queue 和 JetStream 同步、异步各发送一条示例消息，随后发布 App 用户推送。
 
 ```bash
 curl -sS -X POST 'http://127.0.0.1:8888/api/app/nats/publish'
@@ -215,7 +240,7 @@ curl -sS -X POST 'http://127.0.0.1:8888/api/app/nats/publish'
 
 成功返回 `{"code":0,"msg":"成功"}`，发布失败返回业务码 `400`，均使用 HTTP 200。Core 的 `Publish` 成功只表示客户端受理；`PublishJetStream` 等待 PubAck，`PublishJetStreamAsync` 先检查提交 error，再通过 `future.Ok()` / `future.Err()` 获取最终结果。接口成功不代表 handler 已完成；示例确认日志为 `DemoNATSPublish`。失败可能已有部分消息发出或消费，不回滚、不自动重试。
 
-两种 JetStream 发布都要求非空 messageID，Service 使用 Go 1.27 标准库 `uuid.New().String()` 为每次调用生成批次前缀，再分别加 `:sync`、`:async`。重复调用（包括失败后重试）会生成新批次并重新发送四种消息，接口不提供跨调用去重。去重只在同一 Stream 的服务端窗口内生效，不能替代业务幂等。异步 ctx 只用于提交前检查、日志和追踪，取消等待不撤销已提交消息；`PublishAsyncTimeout` 在 [`nats.demo.yaml`](conf.example/nats.demo.yaml) 中配置，默认 5 秒，与消费者 AckWait 无关。超时不保证消息未写入，再次调用会使用新 ID，可能产生重复业务消息。异步方法复制 data/Header，返回后可复用输入，不要修改 `future.Msg()`。
+两种 JetStream 发布都要求非空 messageID，Service 使用 Go 1.27 标准库 `uuid.New().String()` 为每次调用生成批次前缀，再分别加 `:sync`、`:async`。重复调用（包括失败后重试）会生成新批次并重新发送这组消息，接口不提供跨调用去重。去重只在同一 Stream 的服务端窗口内生效，不能替代业务幂等。异步 ctx 只用于提交前检查、日志和追踪，取消等待不撤销已提交消息；`PublishAsyncTimeout` 在 [`nats.demo.yaml`](conf.example/nats.demo.yaml) 中配置，默认 5 秒，与消费者 AckWait 无关。超时不保证消息未写入，再次调用会使用新 ID，可能产生重复业务消息。异步方法复制 data/Header，返回后可复用输入，不要修改 `future.Msg()`。
 
 在 `log/pixiu-demo/biz/nats.info.log` 查看消费记录，在 `http.info.log` 查看 HTTP 发起的 `DemoNATSPublish` 确认记录；未声明命名 Logger 时回退 `info.log`。启动多个连接同一 NATS 的应用实例（HTTP 需使用不同端口），调用测试接口可观察广播与 Queue 的差异。
 
@@ -421,11 +446,11 @@ test/                      控制脚本隔离测试
 
 Handler 只负责参数解析、校验和根据 Service 返回数据构造响应；具体业务放入 `internal/service/`，按业务领域分包，通过构造函数创建服务并接收标准 `context.Context`。OSS 上传由 `internal/service/aliyunoss` 负责打开和关闭文件、设置 Content-Type 并调用默认 OSS 客户端；multipart 临时文件仍由 Handler 随请求结束清理。阿里云 ES 词典管理及实例查询由 `internal/service/aliyunes` 调用默认管理客户端，Handler 将结果转换为接口响应。
 
-HTTP 和 NATS 是并列的业务入口：`httphandler → Service`、`natshandler → Service`。NATS 发布遵循 `Service → natspublisher → infra/nats`，数据库访问继续走 `Service → Repository`；`natspublisher` 与数据库 Repository 同属外部访问层。NATS 消费 Service 的 JetStream 入口接收 `jetstream.Msg`，Core 入口接收 `*nats.Msg`，发布时向 Publisher 传递 `[]byte` 正文。示例沿用原始文本正文，不改为 JSON。
+HTTP 和 NATS 是并列的业务入口：`httphandler → Service`、`natshandler → Service`。NATS 发布遵循 `Service → natspublisher → infra/nats`，数据库访问继续走 `Service → Repository`；`natspublisher` 与数据库 Repository 同属外部访问层。NATS 消费 Service 的 JetStream 入口接收 `jetstream.Msg`，Core 入口接收 `*nats.Msg`，通用 NATS 示例向 Publisher 传递文本正文，App 推送传递有类型的 `realtime.PushCommand`。
 
 `nats.Service.PublishExamples` 决定发布顺序、消息内容和 messageID；`natspublisher.Publisher` 负责主题映射、发送及同步/异步确认，不决定业务流程。`natshandler` 中的包级函数将 Core 和 JetStream 原始消息直接传给 Service，等待业务完成后返回，Handler 和 Service 均不自行 ACK/NAK/Term。
 
-`bootstrap.Start` 在共享客户端和数据库迁移就绪后使用 `natshandler.JetStreamRegistry` 和 `natshandler.CoreRegistry` 装配消费服务。处理函数清单集中在 `natshandler/registry.go`，与 Cron 一样采用包级注册表，自动使用 `HandleTask`、`HandleBroadcast`、`HandleQueue` 函数名，配置引用不变。新增或重命名处理函数时同步维护该清单和 YAML，bootstrap 无需逐项绑定。`infra/nats` 仅保留客户端入口和实例名，不反向导入 Handler 或 Service，避免循环依赖；Publisher 继续通过该入口取得默认客户端。HTTP 与三个 NATS 消费入口均按调用使用无参 `NewService()`，由 Service 内部获取默认 Publisher，无需在启动时构造并持有 Service。NATS 消费排空期间仍可查询默认客户端并继续发布，CloseAll 开始后查询仍 panic。HTTP/Cron 在共享资源关闭前已经退出。所有消费服务排空期间共享连接仍可用，但不保证消息交给已停止的消费者。客户端回收阶段不再执行业务或跨实例调用。
+`bootstrap.Start` 在共享客户端和数据库迁移就绪后使用 `natshandler.JetStreamRegistry` 和 `natshandler.CoreRegistry` 装配消费服务。处理函数清单集中在 `natshandler/registry.go`，普通处理函数沿用函数名，App 推送入口使用包级函数 `HandleAppPush`，按调用获取 `websocket.App()`，注册表初始化期间不取实例。新增或重命名处理函数时同步维护该清单和 YAML，bootstrap 无需逐项绑定。`infra/nats` 仅保留客户端入口和实例名，不反向导入 Handler 或 Service，避免循环依赖；Publisher 继续通过该入口取得默认客户端。HTTP 与三个 NATS 消费入口均按调用使用无参 `NewService()`，由 Service 内部获取默认 Publisher，无需在启动时构造并持有 Service。NATS 消费排空期间仍可查询默认客户端并继续发布，CloseAll 开始后查询仍 panic。HTTP/Cron 在共享资源关闭前已经退出。所有消费服务排空期间共享连接仍可用，但不保证消息交给已停止的消费者。客户端回收阶段不再执行业务或跨实例调用。
 
 Service 按职责、依赖、状态和生命周期划分。同一领域内职责相关、依赖相同且没有独立状态或生命周期差异的操作，默认归入同一个 Service 结构体，方法可按功能分布在多个 `.go` 文件中；文件数量和接口数量不决定结构体数量。只有出现独立业务流程、明显不同的依赖或状态、不同的初始化或关闭职责时，再拆分多个 Service；共用一个客户端本身不足以决定合并。
 

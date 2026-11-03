@@ -40,7 +40,8 @@ func TestNATSHTTPWebSocketAndCronStartup(t *testing.T) {
 		wsAddr := listener.Addr().String()
 		_ = listener.Close()
 		writeStartConfig(t, "websocket.app.yaml", fmt.Sprintf("addr: %q\npath: /ws/app\n", wsAddr))
-		natsClient := newExampleClient(t, startExampleServer(t).ClientURL(), "demo", true)
+		bus := startExampleServer(t)
+		natsClient := newExampleClient(t, bus.ClientURL(), "demo", true)
 		writeExampleRegistration(t, "demo")
 		// 混合启动不启用分布式锁以隔离外部 Redis；显式启用锁时的 Redis 前置约束另有覆盖。
 		writeStartConfig(t, "cron.yaml", "jobs:\n  - name: Heartbeat\n    every: 100ms\n    timeout: 2s\n")
@@ -203,6 +204,32 @@ func TestNATSHTTPWebSocketAndCronStartup(t *testing.T) {
 		}
 		if err := connection.ReadJSON(&welcome); err != nil || welcome.Kind != protocol.Kind_EVENT || welcome.Type != "session.connected" {
 			t.Fatalf("Start 未接通 WebSocket: %+v, err=%v", welcome, err)
+		}
+		// 通过现有 HTTP 发布入口走完整链路。一次请求响应作为 OnOpen 索引登记的屏障。
+		if err := connection.WriteJSON(map[string]any{"kind": 1, "requestId": "ready", "scene": "client", "action": "setPage", "data": map[string]string{"page": "home"}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := connection.ReadJSON(&welcome); err != nil || welcome.Kind != protocol.Kind_RESPONSE {
+			t.Fatalf("连接未就绪: %+v %v", welcome, err)
+		}
+		waitSubscriptions(t, bus, appPushTestSubject, 1)
+		published, err := client.Post("http://"+addr+"/api/app/nats/publish", "application/json", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response struct{ Code int }
+		err = json.NewDecoder(published.Body).Decode(&response)
+		_ = published.Body.Close()
+		if err != nil || published.StatusCode != http.StatusOK || response.Code != 0 {
+			t.Fatalf("HTTP 发布失败: %+v %v", response, err)
+		}
+		var event struct {
+			Kind protocol.Kind
+			Type string
+			Data struct{ Page string }
+		}
+		if err := connection.ReadJSON(&event); err != nil || event.Kind != protocol.Kind_EVENT || event.Type != "client.state" || event.Data.Page != "news" {
+			t.Fatalf("发布的推送未到达本机连接: %+v %v", event, err)
 		}
 		select {
 		case record := <-heartbeat:

@@ -12,10 +12,13 @@ import (
 	"testing"
 	"time"
 
+	"pixiu-demo/internal/infra/websocket"
 	"pixiu-demo/internal/natshandler"
 	natsservice "pixiu-demo/internal/service/nats"
+	"pixiu-demo/internal/wshandler"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
+	"github.com/bpcoder16/pixiu/biz/realtime"
 	"github.com/bpcoder16/pixiu/infra/apprun"
 	"github.com/bpcoder16/pixiu/infra/configx"
 	"github.com/bpcoder16/pixiu/infra/env"
@@ -76,6 +79,7 @@ func testExamplesPublishAndConsumeAcrossInstances(t *testing.T, uncomment bool) 
 	}
 	s := startExampleServer(t)
 	url := s.ClientURL()
+	initializeExampleWebSocket(t)
 	first := newExampleClient(t, url, "first", true)
 	second := newExampleClient(t, url, "second", false)
 	var services []apprun.Service
@@ -257,6 +261,46 @@ func TestRegisterRejectsStreamConflict(t *testing.T) {
 	}
 	if _, err := client.JetStream().Consumer(ctx, "PIXIU_DEMO_TASKS", "demo-worker"); !errors.Is(err, jetstream.ErrConsumerNotFound) {
 		t.Fatalf("Stream 冲突后仍创建了 Consumer: %v", err)
+	}
+}
+
+func initializeExampleWebSocket(t *testing.T) {
+	t.Helper()
+	app, err := wshandler.NewAppServer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := realtime.Register(websocket.AppName, app); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(env.ConfigDirPath(), "websocket.app.yaml"), []byte("addr: 127.0.0.1:0\npath: /ws/app\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	service, err := bootstrap.NewWebSocketService(websocket.AppName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- service.Run() }()
+	t.Cleanup(func() {
+		if err := stopAndWait(service.Stop, service.Wait, service.Cancel); err != nil {
+			t.Error(err)
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("WebSocket 未结束")
+		}
+	})
+	deadline := time.Now().Add(3 * time.Second)
+	for !websocket.App().Ready() {
+		if time.Now().After(deadline) {
+			t.Fatal("WebSocket 未就绪")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 

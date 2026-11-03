@@ -2,7 +2,12 @@ package nats
 
 import (
 	"context"
+	"time"
 	"uuid"
+
+	"pixiu-demo/internal/wspb"
+
+	"github.com/bpcoder16/pixiu/biz/realtime"
 )
 
 // PublishExamples 编排一组示例消息，等待发布确认，不等待消费完成。
@@ -18,5 +23,20 @@ func (s *Service) PublishExamples(ctx context.Context) error {
 	if err := s.publisher.PublishTask(ctx, []byte("sync example"), messageIDPrefix+":sync"); err != nil {
 		return err
 	}
-	return s.publisher.PublishTaskAsync(ctx, []byte("async example"), messageIDPrefix+":async")
+	if err := s.publisher.PublishTaskAsync(ctx, []byte("async example"), messageIDPrefix+":async"); err != nil {
+		return err
+	}
+	return s.publisher.PublishAppPush(ctx, realtime.PushCommand{
+		Kind: realtime.PushUser,
+		ID:   "demo-user",
+		Message: realtime.PushMessage{
+			Type: "client.state",
+			Data: &wspb.StateReply{
+				UserId:   "demo-user",
+				Page:     "news",
+				Revision: 7,
+			},
+			ExpiresAt: time.Now().Add(30 * time.Second),
+		},
+	})
 }

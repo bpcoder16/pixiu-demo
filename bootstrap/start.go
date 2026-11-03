@@ -3,9 +3,9 @@ package bootstrap
 import (
 	"pixiu-demo/internal/cronhandler"
 	"pixiu-demo/internal/infra/nats"
+	"pixiu-demo/internal/infra/websocket"
 	"pixiu-demo/internal/natshandler"
 	"pixiu-demo/internal/route"
-	"pixiu-demo/internal/wshandler"
 
 	"github.com/bpcoder16/pixiu/biz/bootstrap"
 	"github.com/bpcoder16/pixiu/infra/apprun"
@@ -18,19 +18,16 @@ import (
 // main 始终回收共享资源，默认总回收期限 20 秒，日志最后关闭。
 func Start() error {
 	return bootstrap.Start(
+		// WebSocket：读取 websocket.app.yaml，独立监听并装配消息服务与就绪探针。
+		func() (apprun.Service, error) {
+			return bootstrap.NewWebSocketService(websocket.AppName)
+		},
 		// NATS 消费：读取 nats-register.demo.yaml，绑定 JetStream/Core 处理器，运行时注册订阅。
 		func() (apprun.Service, error) {
 			return bootstrap.NewNATSConsumerService(
 				nats.DemoName,
 				natshandler.JetStreamRegistry,
 				natshandler.CoreRegistry,
-			)
-		},
-		// WebSocket：读取 websocket.app.yaml，独立监听并装配消息服务与就绪探针。
-		func() (apprun.Service, error) {
-			return bootstrap.NewWebSocketService(
-				"app",
-				wshandler.NewServer,
 			)
 		},
 		// Gin HTTP：读取 gin.yaml 和 http.yaml，登记业务路由，声明 App/Admin OpenAPI 模块。

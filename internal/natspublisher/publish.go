@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/bpcoder16/pixiu/biz/realtime"
 	"github.com/bpcoder16/pixiu/logit"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -11,6 +12,7 @@ import (
 const (
 	taskSubject      = "pixiu.demo.tasks"
 	broadcastSubject = "pixiu.demo.broadcast"
+	appPushSubject   = "pixiu.demo.ws.app.push"
 	queueSubject     = "pixiu.demo.queue"
 )
 
@@ -18,6 +20,18 @@ const (
 func (p *Publisher) PublishBroadcast(ctx context.Context, data []byte) error {
 	if err := p.client.Publish(ctx, broadcastSubject, data); err != nil {
 		return fmt.Errorf("publish broadcast example: %w", err)
+	}
+	return nil
+}
+
+// PublishAppPush 编码标准命令并发布到 App 端的 Core 主题。各在线节点独立消费。
+func (p *Publisher) PublishAppPush(ctx context.Context, cmd realtime.PushCommand) error {
+	data, err := realtime.MarshalPushCommand(cmd)
+	if err != nil {
+		return err
+	}
+	if err = p.client.Publish(ctx, appPushSubject, data); err != nil {
+		return fmt.Errorf("publish app push: %w", err)
 	}
 	return nil
 }
